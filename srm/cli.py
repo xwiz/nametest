@@ -3,7 +3,7 @@ srm/cli.py — command-line interface and interactive REPL.
 
 Fixes vs. original monolith:
   • _box() now uses paragraph-aware wrapping: the body is split on
-    literal \\n first, then each paragraph is wrapped independently.
+    literal \n first, then each paragraph is wrapped independently.
     This ensures the verbose attractor badge and memory text appear on
     separate lines instead of being merged by textwrap.fill.
   • Added /delete <id> REPL command.
@@ -16,9 +16,16 @@ import sys
 import textwrap
 import argparse
 
-from .config import DB_PATH, NUM_CASTS, NOISE, TOP_K, SAMPLE_KB
+from .config import (
+    DB_PATH, NUM_CASTS, NOISE, TOP_K, SAMPLE_KB,
+    MIN_COS, VOTE_FLOOR,
+    W_VOTE, W_COS,
+    SIM_THRESH, MAX_WORDS,
+    CHAT_KB, JS_KB,
+)
 from .store import MemoryStore
-from .pipeline import srm_query
+from .pipeline import srm_query, srm_query_cast_reconstruct, srm_query_auto
+from .learning import should_auto_learn
 
 
 # ── Box renderer ──────────────────────────────────────────────────────────────
@@ -31,7 +38,7 @@ def _box(rows: list[tuple[str, str]], title: str = "") -> str:
     Render *rows* inside a Unicode box.
 
     Each row is (label, body).  Special label "__sep__" draws a
-    horizontal separator.  Body strings containing literal \\n are
+    horizontal separator.  Body strings containing literal \n are
     split into paragraphs; each paragraph is word-wrapped independently.
 
     Fix: the original used textwrap.fill(body) directly, which merged
@@ -80,19 +87,40 @@ def print_result(result: dict, verbose: bool = False) -> None:
     rows: list[tuple[str, str]] = [("query", result["query"])]
     if result.get("expanded_query"):
         rows.append(("expanded", result["expanded_query"]))
+
+    if verbose:
+        parts = [f"{result.get('num_memories', '?')} memories"]
+        parts.append(f"{result.get('num_casts', '?')} casts")
+        if result.get("num_traversal_candidates") is not None:
+            parts.append(f"traverse={result['num_traversal_candidates']}")
+        if result.get("num_rerank_candidates") is not None:
+            parts.append(f"rerank={result['num_rerank_candidates']}")
+        if result.get("meaning_enabled"):
+            parts.append("meaning=on")
+        if result.get("auto_selected_mode"):
+            scores = result.get("auto_scores", {})
+            synth_score = float(scores.get("synth", 0.0))
+            recon_score = float(scores.get("reconstruct", 0.0))
+            parts.append(
+                f"mode={result['auto_selected_mode']}"
+                f" (synth={synth_score:.4f}"
+                f"  recon={recon_score:.4f})"
+            )
+        rows.append(("debug", " | ".join(parts)))
+
     rows.append(("__sep__", ""))
     rows.append(("response", result["response"]))
 
     if verbose and result.get("attractor_details"):
         rows.append(("__sep__", ""))
-        for rank, a in enumerate(result["attractor_details"][:3]):
-            bar_w = round(a["votes"] / result["num_casts"] * 20)
+        for rank, a in enumerate(result["attractor_details"][:5]):
+            bar_w = round(a["votes"] / max(result["num_casts"], 1) * 20)
             bar   = "█" * bar_w + "░" * (20 - bar_w)
             badge = (
                 f"[{a['votes']:>2}/{result['num_casts']} votes  "
-                f"{bar}  cos={a['cosine']:.3f}  d={a['hamming_dist']}]"
+                f"{bar}  cos={a['cosine']:.3f}  "
+                f"hybrid={a.get('hybrid_score', 0):.3f}  d={a['hamming_dist']}]"
             )
-            # Newline separates badge from memory text — preserved by _box
             rows.append((
                 f"attractor {rank + 1}",
                 f"{badge}\n{a['text']}",
@@ -120,7 +148,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--db",    default=DB_PATH, metavar="PATH",
                     help="SQLite DB path (default: srm_memory.db)")
     ap.add_argument("--seed",  action="store_true",
-                    help="Load built-in 25-entry sample KB")
+                    help="Load built-in 26-entry sample KB")
+    ap.add_argument("--seed-chat", action="store_true",
+                    help="Load built-in chat seed KB")
+    ap.add_argument("--seed-js", action="store_true",
+                    help="Load built-in JavaScript coding KB")
     ap.add_argument("--clear", action="store_true",
                     help="Wipe all memories before starting")
     ap.add_argument("--load",  metavar="FILE",
@@ -138,8 +170,46 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--top-k", type=int,   default=TOP_K,     metavar="K",
                     dest="top_k",
                     help=f"Maximum attractors to retrieve (default: {TOP_K})")
+
+    ap.add_argument("--min-cos", type=float, default=MIN_COS, metavar="F",
+                    dest="min_cos",
+                    help=f"Minimum TF-IDF cosine to admit an attractor (default: {MIN_COS})")
+    ap.add_argument("--vote-floor", type=int, default=VOTE_FLOOR, metavar="N",
+                    dest="vote_floor",
+                    help=f"Minimum votes to admit an attractor (default: {VOTE_FLOOR})")
+    ap.add_argument("--w-vote", type=float, default=W_VOTE, metavar="F",
+                    dest="w_vote",
+                    help=f"Hybrid score weight for vote share (default: {W_VOTE})")
+    ap.add_argument("--w-cos", type=float, default=W_COS, metavar="F",
+                    dest="w_cos",
+                    help=f"Hybrid score weight for TF-IDF cosine (default: {W_COS})")
+    ap.add_argument("--sim-thresh", type=float, default=SIM_THRESH, metavar="F",
+                    dest="sim_thresh",
+                    help=f"MMR de-dup threshold in synthesis (default: {SIM_THRESH})")
+    ap.add_argument("--max-words", type=int, default=MAX_WORDS, metavar="N",
+                    dest="max_words",
+                    help=f"Max words in assembled response (default: {MAX_WORDS})")
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="Show attractor details and scores")
+
+    ap.add_argument(
+        "--mode",
+        choices=["synth", "reconstruct", "auto"],
+        default="synth",
+        help="Query mode: 'synth' (default), 'reconstruct' (fragments), or 'auto' (pick best)",
+    )
+    ap.add_argument(
+        "--rng-seed",
+        type=int,
+        default=None,
+        help="Deterministic RNG seed for stochastic traversal (debug/testing)",
+    )
+
+    ap.add_argument("--meaning-db", metavar="PATH", default=None,
+                    help="Optional meaning DB for verb-polarity-aware encoding")
+    ap.add_argument("--auto-learn", action="store_true",
+                    help="Auto-store safe conversational user messages in REPL")
+
     return ap
 
 
@@ -166,6 +236,15 @@ def main() -> None:
     args  = build_parser().parse_args()
     store = MemoryStore(args.db)
 
+    meaning_db = None
+    if args.meaning_db:
+        try:
+            from .meaning import MeaningDB
+            meaning_db = MeaningDB(args.meaning_db)
+        except Exception as e:
+            print(f"  \033[31mCould not open meaning DB: {e}\033[0m")
+            sys.exit(1)
+
     # ── Pre-query mutations ───────────────────────────────────────────
 
     if args.clear:
@@ -175,6 +254,14 @@ def main() -> None:
     if args.seed:
         n = sum(1 for t in SAMPLE_KB if store.add(t))
         print(f"  Seeded {n} new memories  (total: {store.count()})")
+
+    if args.seed_chat:
+        n = sum(1 for t in CHAT_KB if store.add(t))
+        print(f"  Seeded {n} new chat memories  (total: {store.count()})")
+
+    if args.seed_js:
+        n = sum(1 for t in JS_KB if store.add(t))
+        print(f"  Seeded {n} new JavaScript memories  (total: {store.count()})")
 
     if args.load:
         try:
@@ -196,7 +283,13 @@ def main() -> None:
         print(f"  casts    : {args.casts}")
         print(f"  noise    : {args.noise}")
         print(f"  top-k    : {args.top_k}")
+        print(f"  mode     : {args.mode}")
+        print(f"  rng-seed : {args.rng_seed}")
+        print(f"  meaning  : {bool(meaning_db)}")
+        print(f"  auto-learn : {args.auto_learn}")
         store.close()
+        if meaning_db:
+            meaning_db.close()
         return
 
     if args.list:
@@ -206,15 +299,54 @@ def main() -> None:
         for mid, t in zip(ids, texts):
             print(f"  #{mid:<4}  {t}")
         store.close()
+        if meaning_db:
+            meaning_db.close()
         return
 
     def _run(q: str) -> None:
-        result = srm_query(
-            q, store,
-            top_k=args.top_k,
-            num_casts=args.casts,
-            noise=args.noise,
-        )
+        if args.mode == "auto":
+            result = srm_query_auto(
+                q,
+                store,
+                top_k=args.top_k,
+                num_casts=args.casts,
+                noise=args.noise,
+                min_cos=args.min_cos,
+                vote_floor=args.vote_floor,
+                w_vote=args.w_vote,
+                w_cos=args.w_cos,
+                sim_thresh=args.sim_thresh,
+                max_words=args.max_words,
+                meaning_db=meaning_db,
+                seed=args.rng_seed,
+            )
+        elif args.mode == "reconstruct":
+            result = srm_query_cast_reconstruct(
+                q,
+                store,
+                num_casts=args.casts,
+                noise=args.noise,
+                sim_thresh=args.sim_thresh,
+                max_words=args.max_words,
+                meaning_db=meaning_db,
+                seed=args.rng_seed,
+            )
+        else:
+            result = srm_query(
+                q,
+                store,
+                top_k=args.top_k,
+                num_casts=args.casts,
+                noise=args.noise,
+                min_cos=args.min_cos,
+                vote_floor=args.vote_floor,
+                w_vote=args.w_vote,
+                w_cos=args.w_cos,
+                sim_thresh=args.sim_thresh,
+                max_words=args.max_words,
+                meaning_db=meaning_db,
+                seed=args.rng_seed,
+            )
         print_result(result, verbose=args.verbose)
 
     if args.query:
@@ -223,6 +355,8 @@ def main() -> None:
         else:
             _run(args.query)
         store.close()
+        if meaning_db:
+            meaning_db.close()
         return
 
     # ── Interactive REPL ──────────────────────────────────────────────
@@ -287,7 +421,47 @@ def main() -> None:
             print(f"  db path  : {args.db}")
             print(f"  casts    : {args.casts}")
             print(f"  noise    : {args.noise}")
-            print(f"  top-k    : {args.top_k}\n")
+            print(f"  top-k    : {args.top_k}")
+            print(f"  meaning  : {bool(meaning_db)}\n")
+
+        elif raw.startswith("/meaning "):
+            text = raw[len("/meaning "):].strip()
+            if not text:
+                print("  Usage: /meaning <text>\n")
+            else:
+                try:
+                    from .meaning import extract_meaning
+                    m = extract_meaning(text, db=meaning_db)
+                    print("  alerts:")
+                    if m.get("alerts"):
+                        for a in m["alerts"]:
+                            print(f"    - {a}")
+                    else:
+                        print("    (none)")
+                    print("  frames:")
+                    if m.get("frames"):
+                        for f in m["frames"]:
+                            subj = " ".join(f.get("subject") or []) or "—"
+                            obj  = " ".join(f.get("object") or []) or "—"
+                            v    = f.get("verb") or "—"
+                            vc   = f.get("verb_canonical") or "—"
+                            pc   = f.get("polarity_class") or "—"
+                            print(f"    - subj: {subj} | verb: {v} ({vc}) | class: {pc} | obj: {obj}")
+                    else:
+                        print("    (none)")
+                    print()
+                except Exception as e:
+                    print(f"  \033[31mCould not extract meaning: {e}\033[0m\n")
+
+        elif raw.startswith("/verb "):
+            v = raw[len("/verb "):].strip()
+            if not v:
+                print("  Usage: /verb <verb>\n")
+            elif not meaning_db:
+                print("  (no meaning DB loaded — pass --meaning-db meaning.db)\n")
+            else:
+                from .meaning import describe_verb
+                print(f"  {describe_verb(v, meaning_db)}\n")
 
         elif cmd == "/clear":
             store.clear()
@@ -298,7 +472,20 @@ def main() -> None:
                 print("  \033[33mNo memories stored. "
                       "Use /add <text> first.\033[0m\n")
                 continue
+            learned_msg = None
+            if args.auto_learn:
+                decision = should_auto_learn(raw)
+                if decision.accepted and decision.normalized_text:
+                    ok = store.add(decision.normalized_text)
+                    status = "learned" if ok else "known"
+                    learned_msg = f"  \033[36m[auto-learn: {status} ({decision.reason})]\033[0m"
+                elif args.verbose:
+                    learned_msg = f"  \033[2m[auto-learn skip: {decision.explanation}]\033[0m"
             _run(raw)
+            if learned_msg:
+                print(learned_msg)
             print()
 
     store.close()
+    if meaning_db:
+        meaning_db.close()

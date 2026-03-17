@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections import Counter
 
 import numpy as np
+from numpy.random import Generator
 
 from .config import NUM_CASTS, NOISE
 from .encoding import hamming_batch
@@ -22,7 +23,7 @@ from .encoding import hamming_batch
 
 # ── Single probe ──────────────────────────────────────────────────────────────
 
-def _cast(code: np.ndarray, noise: float) -> np.ndarray:
+def _cast(code: np.ndarray, noise: float, rng: Generator) -> np.ndarray:
     """
     Perturb *code* by flipping each bit independently with probability *noise*.
 
@@ -30,7 +31,7 @@ def _cast(code: np.ndarray, noise: float) -> np.ndarray:
     Returns a new array; does not mutate *code*.
     """
     bits  = np.unpackbits(code)
-    mask  = (np.random.random(len(bits)) < noise).astype(np.uint8)
+    mask  = (rng.random(len(bits)) < noise).astype(np.uint8)
     return np.packbits(bits ^ mask)
 
 
@@ -41,6 +42,7 @@ def traverse(
     mem_codes: np.ndarray,
     num_casts: int = NUM_CASTS,
     noise: float   = NOISE,
+    rng: Generator | None = None,
 ) -> tuple[Counter, list[dict]]:
     """
     Cast *num_casts* noisy probes from the query attractor and collect votes.
@@ -61,11 +63,18 @@ def traverse(
         cast_log: list of {cast_id, landed_on, hamming_dist} for debugging
                   and visualisation
     """
-    votes: Counter    = Counter()
+    votes: Counter       = Counter()
     cast_log: list[dict] = []
 
+    if rng is None:
+        rng = np.random.default_rng()
+
+    # Precompute unpacked bits once; only the flip mask changes per cast.
+    q_bits = np.unpackbits(query_code)
+
     for i in range(num_casts):
-        probe = _cast(query_code, noise)
+        mask  = (rng.random(len(q_bits)) < noise).astype(np.uint8)
+        probe = np.packbits(q_bits ^ mask)
         dists = hamming_batch(probe, mem_codes)
         best  = int(np.argmin(dists))
         votes[best] += 1

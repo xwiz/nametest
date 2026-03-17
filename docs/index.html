@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SRM Browser Demo</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1020;
+      --panel: #131a2f;
+      --panel-2: #1b2542;
+      --text: #e8edf8;
+      --muted: #9ca7bf;
+      --accent: #67e8f9;
+      --accent-2: #8b5cf6;
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --border: rgba(255,255,255,0.1);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, Segoe UI, Arial, sans-serif;
+      background: linear-gradient(180deg, #0b1020, #11192d 45%, #0b1020);
+      color: var(--text);
+    }
+    .wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 32px 20px 56px;
+    }
+    h1, h2, h3, p { margin-top: 0; }
+    .hero {
+      display: grid;
+      gap: 18px;
+      grid-template-columns: 1.2fr 1fr;
+      align-items: start;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: rgba(19,26,47,0.92);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 16px 40px rgba(0,0,0,0.28);
+      backdrop-filter: blur(8px);
+    }
+    .title {
+      font-size: clamp(1.8rem, 3vw, 3rem);
+      line-height: 1.05;
+      margin-bottom: 10px;
+    }
+    .subtitle {
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .badge {
+      padding: 8px 10px;
+      border-radius: 999px;
+      background: rgba(103,232,249,0.08);
+      border: 1px solid rgba(103,232,249,0.18);
+      color: var(--accent);
+      font-size: 0.9rem;
+    }
+    .grid {
+      display: grid;
+      gap: 18px;
+      grid-template-columns: 1.1fr 0.9fr;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+    textarea, select {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--panel-2);
+      color: var(--text);
+      padding: 12px 14px;
+      font: inherit;
+    }
+    textarea { min-height: 110px; resize: vertical; }
+    .row { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
+    button {
+      cursor: pointer;
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 14px;
+      font: inherit;
+      color: white;
+      background: linear-gradient(135deg, var(--accent-2), #2563eb);
+      box-shadow: 0 10px 24px rgba(37,99,235,0.28);
+    }
+    button.secondary {
+      background: rgba(255,255,255,0.06);
+      box-shadow: none;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .prompt-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .prompt-chip {
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 8px 10px;
+      font-size: 0.92rem;
+    }
+    .response {
+      white-space: pre-wrap;
+      line-height: 1.6;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+      min-height: 140px;
+    }
+    .meta {
+      color: var(--muted);
+      font-size: 0.94rem;
+      margin-top: 10px;
+      line-height: 1.5;
+    }
+    ol.memories {
+      margin: 0;
+      padding-left: 20px;
+      display: grid;
+      gap: 10px;
+    }
+    ol.memories li {
+      line-height: 1.5;
+      color: var(--text);
+    }
+    .small {
+      color: var(--muted);
+      font-size: 0.88rem;
+      line-height: 1.5;
+    }
+    .status {
+      color: var(--ok);
+      font-weight: 600;
+    }
+    .warn { color: var(--warn); }
+    @media (max-width: 860px) {
+      .hero, .grid, .row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <div class="card">
+        <h1 class="title">SRM browser demo</h1>
+        <p class="subtitle">
+          A lightweight browser demo built from the current repo's built-in sample KB, chat KB,
+          and query expansions. It runs fully client-side so you can open it from GitHub.
+        </p>
+        <div class="badges">
+          <span class="badge">No backend</span>
+          <span class="badge">Built-in KBs</span>
+          <span class="badge">Query expansion</span>
+          <span class="badge">Synthesis + reconstruction style output</span>
+        </div>
+      </div>
+      <div class="card">
+        <h3>What to try</h3>
+        <div id="promptList" class="prompt-list"></div>
+        <p class="small" style="margin-top:14px;">
+          For the full Python system, use <code>python main.py --seed-chat --mode auto</code> or
+          attach <code>meaning.db</code> with <code>--meaning-db meaning.db</code>.
+        </p>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <label for="query">Query</label>
+        <textarea id="query" placeholder="Ask something like: Who are you, I am bored, or I have headache"></textarea>
+
+        <div class="row" style="margin-top:12px;">
+          <div>
+            <label for="dataset">Demo memory set</label>
+            <select id="dataset">
+              <option value="chat">Chat KB</option>
+              <option value="sample">Science sample KB</option>
+              <option value="both" selected>Both</option>
+            </select>
+          </div>
+          <div>
+            <label for="mode">Response style</label>
+            <select id="mode">
+              <option value="auto" selected>Auto</option>
+              <option value="synth">Synth</option>
+              <option value="reconstruct">Reconstruct</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:12px;">
+          <button id="runBtn">Run demo</button>
+          <button id="clearBtn" class="secondary">Clear</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Response</h3>
+        <div id="response" class="response">Loading demo data…</div>
+        <div id="meta" class="meta"></div>
+      </div>
+    </section>
+
+    <section class="grid" style="margin-top:18px;">
+      <div class="card">
+        <h3>Selected memories</h3>
+        <ol id="memories" class="memories"></ol>
+      </div>
+      <div class="card">
+        <h3>Notes</h3>
+        <p class="small">
+          This page uses the same built-in KB content and expansions exported from the repo, but it is a
+          browser-safe demo rather than the full Python stochastic-cast engine.
+        </p>
+        <p class="small">
+          Best repo entry points:
+        </p>
+        <ul class="small">
+          <li><code>python main.py --seed --mode auto</code></li>
+          <li><code>python main.py --seed-chat --mode auto --auto-learn</code></li>
+          <li><code>python build_meaning_db.py --src data/verbs --db meaning.db --fresh --report</code></li>
+        </ul>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const STOPWORDS = new Set([
+      'the','a','an','is','are','was','were','in','of','to','and','or','it','its','this','that','these','those','be','been','by','for','with','on','at','from','as','into','through','during','before','after','above','below','between','each','few','more','most','other','some','such','no','nor','not','only','own','same','so','than','too','very','can','will','just','should','now','have','has','had','do','does','did','would','could','may','might','also','which','who','how','what','when','where','why','about','used','using','their','they','them','we','us','you','he','she','his','her','all','any'
+    ]);
+    const CONNECTIVES = ['Additionally, ', 'Furthermore, ', 'In summary, '];
+
+    function tokenise(text) {
+      return (text.toLowerCase().match(/[a-z]+/g) || []).filter(w => w.length > 1);
+    }
+
+    function expandQuery(text, expansions) {
+      const toks = tokenise(text);
+      const seen = new Set(toks);
+      const extras = [];
+      for (const t of toks) {
+        for (const exp of (expansions[t] || [])) {
+          if (!seen.has(exp)) {
+            seen.add(exp);
+            extras.push(exp);
+          }
+        }
+      }
+      return extras.length ? `${text} ${extras.join(' ')}` : text;
+    }
+
+    function idfTable(corpus) {
+      const df = new Map();
+      const n = corpus.length || 1;
+      for (const doc of corpus) {
+        const uniq = new Set(tokenise(doc));
+        for (const tok of uniq) {
+          df.set(tok, (df.get(tok) || 0) + 1);
+        }
+      }
+      const out = new Map();
+      for (const [tok, f] of df.entries()) {
+        out.set(tok, Math.log((n + 1) / (f + 1)) + 0.5);
+      }
+      return out;
+    }
+
+    function tfidfVec(tokens, idf) {
+      const content = tokens.filter(t => !STOPWORDS.has(t) && t.length > 2);
+      const used = content.length ? content : tokens;
+      const tf = new Map();
+      for (const t of used) tf.set(t, (tf.get(t) || 0) + 1);
+      const n = Math.max(used.length, 1);
+      const out = new Map();
+      for (const [t, c] of tf.entries()) out.set(t, (c / n) * (idf.get(t) || 0));
+      return out;
+    }
+
+    function cosine(a, b) {
+      let dot = 0, na = 0, nb = 0;
+      for (const v of a.values()) na += v * v;
+      for (const v of b.values()) nb += v * v;
+      for (const [k, v] of a.entries()) {
+        if (b.has(k)) dot += v * b.get(k);
+      }
+      return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
+    }
+
+    function overlapScore(qTokens, docTokens) {
+      const q = new Set(qTokens.filter(t => !STOPWORDS.has(t) && t.length > 2));
+      const d = new Set(docTokens.filter(t => !STOPWORDS.has(t) && t.length > 2));
+      let hits = 0;
+      for (const t of q) if (d.has(t)) hits += 1;
+      return q.size ? hits / q.size : 0;
+    }
+
+    function selectMemories(query, corpus, expansions) {
+      const expanded = expandQuery(query, expansions);
+      const idf = idfTable(corpus);
+      const qVec = tfidfVec(tokenise(expanded), idf);
+      const qTokens = tokenise(expanded);
+      const ranked = corpus.map((text, idx) => {
+        const dTokens = tokenise(text);
+        const dVec = tfidfVec(dTokens, idf);
+        const cos = cosine(qVec, dVec);
+        const overlap = overlapScore(qTokens, dTokens);
+        const score = 0.7 * cos + 0.3 * overlap;
+        return { idx, text, cos, overlap, score };
+      }).sort((a, b) => b.score - a.score);
+      return { expanded, picked: ranked.filter(x => x.score > 0.01).slice(0, 4) };
+    }
+
+    function synthesise(query, picked) {
+      if (!picked.length) return 'No relevant memories found in the selected demo KB.';
+      const lines = picked.map(x => x.text.trim()).filter(Boolean);
+      if (!lines.length) return 'No relevant memories found in the selected demo KB.';
+      const chosen = [];
+      for (const line of lines) {
+        const lt = new Set(tokenise(line));
+        const redundant = chosen.some(prev => {
+          const pt = new Set(tokenise(prev));
+          let overlap = 0;
+          for (const t of lt) if (pt.has(t)) overlap += 1;
+          return overlap >= Math.max(3, Math.floor(lt.size * 0.6));
+        });
+        if (!redundant) chosen.push(line);
+        if (chosen.length >= 3) break;
+      }
+      if (chosen.length === 1) return chosen[0];
+      return chosen.map((line, i) => i === 0 ? line : `${CONNECTIVES[(i - 1) % CONNECTIVES.length]}${line.charAt(0).toLowerCase()}${line.slice(1)}`).join(' ');
+    }
+
+    function reconstruct(picked) {
+      if (!picked.length) return 'No relevant memories found in the selected demo KB.';
+      return picked.map(x => x.text.trim()).slice(0, 3).join(' ');
+    }
+
+    function chooseMode(picked, forcedMode) {
+      if (forcedMode !== 'auto') return forcedMode;
+      const avgWords = picked.length ? picked.reduce((n, x) => n + tokenise(x.text).length, 0) / picked.length : 0;
+      return avgWords < 8 ? 'reconstruct' : 'synth';
+    }
+
+    function render(result) {
+      document.getElementById('response').textContent = result.response;
+      document.getElementById('meta').innerHTML = `
+        <div><span class="status">Loaded</span> version ${result.version}</div>
+        <div>Expanded query: <code>${result.expanded}</code></div>
+        <div>Mode: <strong>${result.mode}</strong></div>
+      `;
+      const list = document.getElementById('memories');
+      list.innerHTML = '';
+      for (const item of result.picked) {
+        const li = document.createElement('li');
+        li.innerHTML = `${item.text} <div class="small">score=${item.score.toFixed(3)} cosine=${item.cos.toFixed(3)} overlap=${item.overlap.toFixed(3)}</div>`;
+        list.appendChild(li);
+      }
+      if (!result.picked.length) {
+        const li = document.createElement('li');
+        li.className = 'small warn';
+        li.textContent = 'No matching memories.';
+        list.appendChild(li);
+      }
+    }
+
+    async function boot() {
+      const res = await fetch('./demo-data.json');
+      const data = await res.json();
+      const promptList = document.getElementById('promptList');
+      for (const prompt of data.prompts) {
+        const btn = document.createElement('button');
+        btn.className = 'prompt-chip';
+        btn.textContent = prompt;
+        btn.onclick = () => {
+          document.getElementById('query').value = prompt;
+          run(data);
+        };
+        promptList.appendChild(btn);
+      }
+
+      document.getElementById('response').textContent = 'Ready. Pick a prompt or type your own query.';
+      document.getElementById('meta').innerHTML = `<div class="status">Demo data loaded</div><div>Version ${data.version}</div>`;
+
+      document.getElementById('runBtn').onclick = () => run(data);
+      document.getElementById('clearBtn').onclick = () => {
+        document.getElementById('query').value = '';
+        document.getElementById('response').textContent = 'Cleared.';
+        document.getElementById('meta').textContent = '';
+        document.getElementById('memories').innerHTML = '';
+      };
+    }
+
+    function run(data) {
+      const query = document.getElementById('query').value.trim();
+      if (!query) {
+        document.getElementById('response').textContent = 'Enter a query first.';
+        return;
+      }
+      const dataset = document.getElementById('dataset').value;
+      const forcedMode = document.getElementById('mode').value;
+      const corpus = dataset === 'chat' ? data.chatKb : dataset === 'sample' ? data.sampleKb : data.chatKb.concat(data.sampleKb);
+      const { expanded, picked } = selectMemories(query, corpus, data.expansions);
+      const mode = chooseMode(picked, forcedMode);
+      const response = mode === 'reconstruct' ? reconstruct(picked) : synthesise(query, picked);
+      render({ version: data.version, expanded, picked, response, mode });
+    }
+
+    boot().catch(err => {
+      document.getElementById('response').textContent = `Could not load demo data: ${err}`;
+      document.getElementById('meta').textContent = 'Make sure docs/demo-data.json exists.';
+    });
+  </script>
+</body>
+</html>

@@ -49,126 +49,68 @@ from collections import Counter, defaultdict
 
 import numpy as np
 
-# ── Polarity class catalogue ──────────────────────────────────────────────────
-#
-# 12 semantic direction classes.  Each gets a deterministic 128-bit bitmask
-# generated from a fixed seed so the masks are stable across rebuilds.
-# Adjacent classes in the list are kept semantically related so the Hamming
-# geometry is meaningful:
-#   destruct ↔ preserve should be far apart (~64 bits)
-#   intensify ↔ diminish should be far apart
-#   aggregate ↔ disrupt should be far apart
-#
-# We generate masks via seeded numpy random; expected hamming between any
-# two random 128-bit codes is 64.  We post-check all pairs exceed 48 bits.
+STATE_DIM_WEIGHTS: dict[str, float] = {
+    "physical": 3.0,
+    "emotional": 2.0,
+    "mental": 1.0,
+    "positional": 1.0,
+}
 
-POLARITY_CLASSES: list[dict] = [
-    # class_id (0-indexed), name, representative goals/states
-    {"name": "destruct",   "keywords": {"harm","worsen","damage","destroy","injustice",
-                                         "degrade","corrupt","weaken_obj","break","ruin",
-                                         "oppressed","deprived","worsened","negative"}},
-    {"name": "preserve",   "keywords": {"protect","maintain","sustain","keep","conservation",
-                                         "stable","unchanged","retention","guard","saved",
-                                         "preserved","intact"}},
-    {"name": "transfer",   "keywords": {"transfer","movement","transport","convey","relay",
-                                         "send","pass","dispatch","deliver","shift","moved"}},
-    {"name": "enable",     "keywords": {"create","produce","generate","build","formation",
-                                         "empower","allow","facilitate","construct","initiate",
-                                         "created","formed","generated"}},
-    {"name": "block",      "keywords": {"prevent","stop","negate","prohibit","obstruct",
-                                         "suppress","inhibit","halt","restrict","deny",
-                                         "blocked","prevented","stopped"}},
-    {"name": "intensify",  "keywords": {"intensify","amplify","increase","strengthen",
-                                         "stimulation","escalate","heighten","magnify",
-                                         "escalated","triggered","intensified","amplified"}},
-    {"name": "diminish",   "keywords": {"reduce","weaken","decrease","lessen","shrink",
-                                         "minimise","dampen","attenuate","lowered","reduced",
-                                         "weakened","decreased"}},
-    {"name": "aggregate",  "keywords": {"collection","consolidation","clustering","grouping",
-                                         "merging","combine","coalesce","accumulate",
-                                         "clustered","combined","grouped","compacted",
-                                         "unified"}},
-    {"name": "align",      "keywords": {"harmony","alignment","consent","agreement",
-                                         "coordination","synchronise","reconcile","unify",
-                                         "accepted","approved","affirmed","aligned",
-                                         "shared belief"}},
-    {"name": "disrupt",    "keywords": {"disruption","disturb","agitate","unsettle","break",
-                                         "destabilise","perturb","interrupt","interfere",
-                                         "disturbed","unsettled","in motion","shifted"}},
-    {"name": "transform",  "keywords": {"maturation","evolution","change","conversion",
-                                         "alter","mutate","develop","metamorphose",
-                                         "changed","matured","evolved","aged","weathered"}},
-    {"name": "process",    "keywords": {"resolution","coping","understanding","analysis",
-                                         "resolve","work through","deliberate","reflect",
-                                         "processed","settled","decided","experienced"}},
-]
-
-NUM_CLASSES = len(POLARITY_CLASSES)
+_SKIP_STATES = frozenset({
+    "non-applicable",
+    "non applicable",
+    "unchanged",
+    "neutral",
+})
 
 
-def _generate_bitmasks(seed: int = 42) -> list[bytes]:
-    """
-    Generate NUM_CLASSES orthogonal-ish 128-bit bitmasks.
-
-    Strategy: draw random uint8 arrays with a fixed seed until every
-    pair of masks has hamming distance ≥ 48.  With 128 bits and 12 classes
-    this typically succeeds on the first draw.
-    """
-    rng = np.random.default_rng(seed)
-    for attempt in range(1000):
-        masks = rng.integers(0, 256, size=(NUM_CLASSES, 16), dtype=np.uint8)
-        pop = np.array([bin(b).count("1") for b in range(256)], dtype=np.int32)
-        ok = True
-        for i in range(NUM_CLASSES):
-            for j in range(i + 1, NUM_CLASSES):
-                d = int(pop[masks[i] ^ masks[j]].sum())
-                if d < 48:
-                    ok = False
-                    break
-            if not ok:
-                break
-        if ok:
-            return [m.tobytes() for m in masks]
-    raise RuntimeError("Could not generate orthogonal bitmasks after 1000 attempts")
+def _final_state_terms(final_obj_states: dict | None) -> list[tuple[str, float]]:
+    if not isinstance(final_obj_states, dict):
+        return []
+    out: list[tuple[str, float]] = []
+    for dim, values in final_obj_states.items():
+        weight = STATE_DIM_WEIGHTS.get(dim, 1.0)
+        if isinstance(values, list):
+            seq = values
+        elif values is None:
+            seq = []
+        else:
+            seq = [values]
+        for sv in seq:
+            text = str(sv).strip().lower()
+            if text and text not in _SKIP_STATES:
+                out.append((text, weight))
+    return out
 
 
-# ── Keyword → polarity class scorer ──────────────────────────────────────────
+def _mask_from_outcome(outcome: dict) -> bytes:
+    """SimHash final object state words directly into a 128-bit polarity mask."""
+    weights = np.zeros(128, dtype=np.float64)
 
-def _score_polarity(verb_data: dict) -> str:
-    """
-    Derive the best-fit polarity class for a verb entry.
+    for state_value, weight in _final_state_terms(outcome.get("final_object_states")):
+        raw = hashlib.md5(state_value.encode("utf-8")).digest()
+        bits = np.unpackbits(np.frombuffer(raw, dtype=np.uint8), bitorder="little")
+        weights += np.where(bits, weight, -weight)
 
-    Scores each class by counting keyword matches in:
-      goals (weight 3), mechanisms (weight 2),
-      final_object_states all dimensions (weight 2),
-      final_subject_states all dimensions (weight 1)
+    if not weights.any():
+        verb = str(outcome.get("verb", "unknown")).strip().lower() or "unknown"
+        raw = hashlib.md5(verb.encode("utf-8")).digest()
+        bits = np.unpackbits(np.frombuffer(raw, dtype=np.uint8), bitorder="little")
+        weights += np.where(bits, 1.0, -1.0)
 
-    Falls back to "transform" if no match exceeds 0.
-    """
-    scores: Counter = Counter()
+    return np.packbits((weights > 0).astype(np.uint8)).tobytes()
 
-    def _hit(text: str, weight: int) -> None:
-        low = text.lower().replace("-", " ").replace("_", " ")
-        for ci, cls in enumerate(POLARITY_CLASSES):
-            for kw in cls["keywords"]:
-                if kw in low:
-                    scores[ci] += weight
 
-    for g in verb_data.get("goals", []):
-        _hit(g, 3)
-    for m in verb_data.get("mechanisms", []):
-        _hit(m, 2)
+def _mask_from_states(final_obj_states: dict | None) -> bytes:
+    """Backwards-compatible helper used by tests: derive mask from final_object_states."""
+    return _mask_from_outcome({"verb": "_", "final_object_states": final_obj_states or {}})
 
-    for role_key in ("final_object_states", "final_subject_states"):
-        weight = 2 if role_key == "final_object_states" else 1
-        for dim_vals in verb_data.get(role_key, {}).values():
-            for v in dim_vals:
-                _hit(v, weight)
 
-    if not scores:
-        return "transform"
-    best = scores.most_common(1)[0][0]
-    return POLARITY_CLASSES[best]["name"]
+def _label_from_states(final_obj_states: dict | None) -> str:
+    terms = [state for state, _ in _final_state_terms(final_obj_states)]
+    if not terms:
+        return "state-mask"
+    return " / ".join(terms[:3])
 
 
 # ── Schema ────────────────────────────────────────────────────────────────────
@@ -177,23 +119,12 @@ SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 
-CREATE TABLE IF NOT EXISTS polarity_classes (
-    id      INTEGER PRIMARY KEY,
-    name    TEXT UNIQUE NOT NULL,
-    bitmask BLOB NOT NULL          -- 16 bytes = 128 bits
-);
-
 CREATE TABLE IF NOT EXISTS verbs (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
     verb    TEXT UNIQUE NOT NULL,
-    prefix  TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS verb_polarity (
-    verb_id  INTEGER NOT NULL REFERENCES verbs(id),
-    class_id INTEGER NOT NULL REFERENCES polarity_classes(id),
-    score    REAL NOT NULL DEFAULT 1.0,
-    PRIMARY KEY (verb_id, class_id)
+    prefix  TEXT NOT NULL,
+    polarity_label TEXT NOT NULL DEFAULT 'state-mask',
+    polarity_mask BLOB NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS verb_goals (
@@ -226,19 +157,9 @@ CREATE TABLE IF NOT EXISTS state_transforms (
     state_value TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_verb_polarity_verb   ON verb_polarity(verb_id);
+CREATE INDEX IF NOT EXISTS idx_verbs_verb            ON verbs(verb);
 CREATE INDEX IF NOT EXISTS idx_state_transforms_verb ON state_transforms(verb_id);
 CREATE INDEX IF NOT EXISTS idx_verb_goals_verb       ON verb_goals(verb_id);
-
--- Flat lookup view: verb text → polarity class name + bitmask
-CREATE VIEW IF NOT EXISTS verb_meaning AS
-SELECT  v.verb,
-        pc.name    AS polarity_class,
-        pc.bitmask AS polarity_mask,
-        vp.score
-FROM    verbs v
-JOIN    verb_polarity  vp ON vp.verb_id  = v.id
-JOIN    polarity_classes pc ON pc.id     = vp.class_id;
 
 -- Flat view for state delta inspection
 CREATE VIEW IF NOT EXISTS verb_state_delta AS
@@ -255,26 +176,52 @@ JOIN    state_transforms st ON st.verb_id = v.id;
 # ── Loader ────────────────────────────────────────────────────────────────────
 
 def load_json_file(path: Path) -> dict:
-    with open(path) as fh:
+    with open(path, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+def _iter_outcomes(node) -> list[dict]:
+    """Return a flat list of outcome dicts from potentially nested JSON."""
+    out: list[dict] = []
+    if node is None:
+        return out
+    if isinstance(node, dict):
+        out.append(node)
+        return out
+    if isinstance(node, list):
+        for item in node:
+            out.extend(_iter_outcomes(item))
+    return out
+
+
+def _as_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
 
 
 def ingest_file(conn: sqlite3.Connection,
                 data: dict,
-                class_name_to_id: dict[str, int],
                 stats: Counter) -> None:
     """Insert all verb data from one parsed JSON file."""
     prefix = data.get("prefix", "??")
+    allowed_dims = {"physical", "emotional", "mental", "positional"}
 
-    for outcome in data.get("outcomes", []):
-        verb = outcome.get("verb", "").strip().lower()
+    outcomes = _iter_outcomes(data.get("outcomes", []))
+    for outcome in outcomes:
+        verb = str(outcome.get("verb", "")).strip().lower()
         if not verb:
             continue
 
         # ── verbs table ──────────────────────────────────────────────
         try:
+            polarity_label = _label_from_states(outcome.get("final_object_states", {}))
+            polarity_mask = _mask_from_outcome(outcome)
             cur = conn.execute(
-                "INSERT INTO verbs (verb, prefix) VALUES (?,?)", (verb, prefix)
+                "INSERT INTO verbs (verb, prefix, polarity_label, polarity_mask) VALUES (?,?,?,?)",
+                (verb, prefix, polarity_label, polarity_mask),
             )
             verb_id = cur.lastrowid
             stats["inserted"] += 1
@@ -285,38 +232,30 @@ def ingest_file(conn: sqlite3.Connection,
             stats["skipped_dup"] += 1
             continue
 
-        # ── polarity ─────────────────────────────────────────────────
-        polarity_name = _score_polarity(outcome)
-        class_id = class_name_to_id[polarity_name]
-        conn.execute(
-            "INSERT INTO verb_polarity (verb_id, class_id, score) VALUES (?,?,?)",
-            (verb_id, class_id, 1.0),
-        )
-
         # ── goals / mechanisms / tools ────────────────────────────────
-        for g in outcome.get("goals", []):
+        for g in _as_list(outcome.get("goals", [])):
             conn.execute(
                 "INSERT INTO verb_goals (verb_id, goal) VALUES (?,?)", (verb_id, g)
             )
-        for m in outcome.get("mechanisms", []):
+        for m in _as_list(outcome.get("mechanisms", [])):
             conn.execute(
                 "INSERT INTO verb_mechanisms (verb_id, mechanism) VALUES (?,?)",
                 (verb_id, m),
             )
-        for t in outcome.get("tools", []):
+        for t in _as_list(outcome.get("tools", [])):
             if t:
                 conn.execute(
                     "INSERT INTO verb_tools (verb_id, tool) VALUES (?,?)", (verb_id, t)
                 )
 
         # ── applicability ─────────────────────────────────────────────
-        for etype in outcome.get("applicable_subjects", []):
+        for etype in _as_list(outcome.get("applicable_subjects", [])):
             conn.execute(
                 "INSERT INTO verb_applicability (verb_id, role, entity_type) "
                 "VALUES (?,?,?)",
                 (verb_id, "subject", etype),
             )
-        for etype in outcome.get("applicable_objects", []):
+        for etype in _as_list(outcome.get("applicable_objects", [])):
             conn.execute(
                 "INSERT INTO verb_applicability (verb_id, role, entity_type) "
                 "VALUES (?,?,?)",
@@ -329,24 +268,37 @@ def ingest_file(conn: sqlite3.Connection,
             "final":    ("final_subject_states",    "final_object_states"),
         }
         for phase, (subj_key, obj_key) in phase_keys.items():
-            for dim, values in outcome.get(subj_key, {}).items():
-                for sv in values:
-                    if sv and sv.lower() != "non-applicable":
-                        conn.execute(
-                            "INSERT INTO state_transforms "
-                            "(verb_id,role,phase,dimension,state_value) "
-                            "VALUES (?,?,?,?,?)",
-                            (verb_id, "subject", phase, dim, sv),
-                        )
-            for dim, values in outcome.get(obj_key, {}).items():
-                for sv in values:
-                    if sv and sv.lower() != "non-applicable":
-                        conn.execute(
-                            "INSERT INTO state_transforms "
-                            "(verb_id,role,phase,dimension,state_value) "
-                            "VALUES (?,?,?,?,?)",
-                            (verb_id, "object", phase, dim, sv),
-                        )
+            subj_states = outcome.get(subj_key, {})
+            if isinstance(subj_states, dict):
+                for dim, values in subj_states.items():
+                    if dim not in allowed_dims:
+                        stats["skipped_dim"] += 1
+                        continue
+                    for sv in _as_list(values):
+                        sv = str(sv).strip()
+                        if sv and sv.lower() != "non-applicable":
+                            conn.execute(
+                                "INSERT INTO state_transforms "
+                                "(verb_id,role,phase,dimension,state_value) "
+                                "VALUES (?,?,?,?,?)",
+                                (verb_id, "subject", phase, dim, sv),
+                            )
+
+            obj_states = outcome.get(obj_key, {})
+            if isinstance(obj_states, dict):
+                for dim, values in obj_states.items():
+                    if dim not in allowed_dims:
+                        stats["skipped_dim"] += 1
+                        continue
+                    for sv in _as_list(values):
+                        sv = str(sv).strip()
+                        if sv and sv.lower() != "non-applicable":
+                            conn.execute(
+                                "INSERT INTO state_transforms "
+                                "(verb_id,role,phase,dimension,state_value) "
+                                "VALUES (?,?,?,?,?)",
+                                (verb_id, "object", phase, dim, sv),
+                            )
 
 
 # ── Report ────────────────────────────────────────────────────────────────────
@@ -358,45 +310,26 @@ def print_report(conn: sqlite3.Connection) -> None:
     print(f"  verbs loaded     : {n_verbs}")
     print(f"  state transforms : {n_states}")
 
-    print("\n  Polarity class distribution:")
+    print("\n  Sample state labels:")
     rows = conn.execute("""
-        SELECT pc.name, COUNT(vp.verb_id) as n
-        FROM   polarity_classes pc
-        LEFT JOIN verb_polarity vp ON vp.class_id = pc.id
-        GROUP  BY pc.id
-        ORDER  BY n DESC
+        SELECT polarity_label, COUNT(*) as n
+        FROM   verbs
+        GROUP  BY polarity_label
+        ORDER  BY n DESC, polarity_label ASC
+        LIMIT 20
     """).fetchall()
     for name, n in rows:
-        bar = "█" * n + "░" * max(0, 12 - n)
-        print(f"    {name:<12}  {bar}  {n}")
+        print(f"    {name:<28}  {n}")
 
     print("\n  Sample verb meanings:")
     sample = conn.execute("""
-        SELECT v.verb, pc.name
-        FROM   verbs v
-        JOIN   verb_polarity vp ON vp.verb_id = v.id
-        JOIN   polarity_classes pc ON pc.id = vp.class_id
-        ORDER  BY v.verb
+        SELECT verb, polarity_label
+        FROM   verbs
+        ORDER  BY verb
         LIMIT  20
     """).fetchall()
     for verb, cls in sample:
         print(f"    {verb:<18}  →  {cls}")
-
-    print("\n  Bitmask Hamming distance matrix (min should be ≥ 48):")
-    masks = conn.execute(
-        "SELECT name, bitmask FROM polarity_classes ORDER BY id"
-    ).fetchall()
-    pop = [bin(b).count("1") for b in range(256)]
-    names = [r[0][:6] for r in masks]
-    arrs  = [np.frombuffer(r[1], dtype=np.uint8) for r in masks]
-    header = "         " + "".join(f"{n:>7}" for n in names)
-    print(f"    {header}")
-    for i, (ni, ai) in enumerate(zip(names, arrs)):
-        row = f"    {ni:<8}"
-        for j, aj in enumerate(arrs):
-            d = int(sum(pop[a ^ b] for a, b in zip(ai, aj)))
-            row += f"  {d:>5}"
-        print(row)
     print()
 
 
@@ -413,19 +346,11 @@ def build(src_dir: str, db_path: str, report: bool = False) -> None:
 
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA)
-
-    # ── seed polarity classes ──────────────────────────────────────────
-    bitmasks = _generate_bitmasks()
-    class_name_to_id: dict[str, int] = {}
-    for i, (cls, mask) in enumerate(zip(POLARITY_CLASSES, bitmasks)):
-        try:
-            conn.execute(
-                "INSERT INTO polarity_classes (id, name, bitmask) VALUES (?,?,?)",
-                (i, cls["name"], mask),
-            )
-        except sqlite3.IntegrityError:
-            pass  # already seeded on a previous run
-        class_name_to_id[cls["name"]] = i
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(verbs)").fetchall()}
+    if "polarity_label" not in cols:
+        conn.execute("ALTER TABLE verbs ADD COLUMN polarity_label TEXT NOT NULL DEFAULT 'state-mask'")
+    if "polarity_mask" not in cols:
+        conn.execute("ALTER TABLE verbs ADD COLUMN polarity_mask BLOB")
     conn.commit()
 
     # ── ingest each file ───────────────────────────────────────────────
@@ -438,10 +363,10 @@ def build(src_dir: str, db_path: str, report: bool = False) -> None:
             stats["file_errors"] += 1
             continue
 
-        ingest_file(conn, data, class_name_to_id, stats)
+        ingest_file(conn, data, stats)
         conn.commit()
-        print(f"  \033[32m✓\033[0m  {jf.name:<16}  "
-              f"({len(data.get('outcomes', []))} outcomes)")
+        outcome_count = len(_iter_outcomes(data.get("outcomes", [])))
+        print(f"  \033[32m✓\033[0m  {jf.name:<16}  ({outcome_count} outcomes)")
 
     print(f"\n  Inserted {stats['inserted']} verbs  "
           f"({stats['skipped_dup']} duplicates skipped)")
@@ -466,7 +391,25 @@ def main() -> None:
     ap.add_argument("--src",    default="data/verbs/",  help="Directory of verb JSON files")
     ap.add_argument("--db",     default="meaning.db",   help="Output SQLite path")
     ap.add_argument("--report", action="store_true",    help="Print analysis after build")
+    ap.add_argument("--fresh",  action="store_true",    help="Drop existing tables/views before rebuild")
     args = ap.parse_args()
+
+    if args.fresh and os.path.exists(args.db):
+        conn = sqlite3.connect(args.db)
+        conn.executescript("""
+            DROP VIEW IF EXISTS verb_state_delta;
+            DROP VIEW IF EXISTS verb_meaning;
+            DROP TABLE IF EXISTS state_transforms;
+            DROP TABLE IF EXISTS verb_applicability;
+            DROP TABLE IF EXISTS verb_tools;
+            DROP TABLE IF EXISTS verb_mechanisms;
+            DROP TABLE IF EXISTS verb_goals;
+            DROP TABLE IF EXISTS verb_polarity;
+            DROP TABLE IF EXISTS verbs;
+            DROP TABLE IF EXISTS polarity_classes;
+        """)
+        conn.commit()
+        conn.close()
 
     build(args.src, args.db, report=args.report)
 

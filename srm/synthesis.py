@@ -55,6 +55,7 @@ def synthesise(
     num_casts: int    = NUM_CASTS,
     max_words: int    = MAX_WORDS,
     sim_thresh: float = SIM_THRESH,
+    rng: random.Random | None = None,
 ) -> str:
     """
     Build a response string from the top-ranked attractor memories.
@@ -132,11 +133,11 @@ def synthesise(
         if i == 0:
             prefix = ""
         elif i == n - 1 and n > 2:
-            prefix = random.choice(CONN_CONCLUDE)
+            prefix = (rng.choice(CONN_CONCLUDE) if rng else random.choice(CONN_CONCLUDE))
         elif any(w in tokenise(sent) for w in _NEG_WORDS):
-            prefix = random.choice(CONN_CONTRAST)
+            prefix = (rng.choice(CONN_CONTRAST) if rng else random.choice(CONN_CONTRAST))
         else:
-            prefix = random.choice(CONN_SUPPORT)
+            prefix = (rng.choice(CONN_SUPPORT) if rng else random.choice(CONN_SUPPORT))
         parts.append(prefix + sent)
 
     return " ".join(parts)

@@ -1,0 +1,363 @@
+{
+  "version": "1.1.0",
+  "sampleKb": [
+    "The mitochondria is the powerhouse of the cell and produces ATP through cellular respiration.",
+    "The immune system uses antibodies to recognize and neutralize pathogens like bacteria and viruses.",
+    "Vaccines train the immune system to recognise pathogens without causing disease.",
+    "Antibiotics kill bacteria by disrupting cell wall synthesis or protein production.",
+    "CRISPR-Cas9 allows precise editing of DNA sequences by using guide RNA to locate target genes.",
+    "The double helix structure of DNA was discovered by Watson and Crick in 1953.",
+    "RNA serves as the intermediary between DNA and protein synthesis through transcription.",
+    "Photosynthesis converts sunlight, water, and carbon dioxide into glucose and oxygen in plants.",
+    "Diffusion allows molecules to move from regions of high concentration to low concentration.",
+    "Neurons communicate via electrochemical signals across synapses using neurotransmitters.",
+    "Synaptic plasticity underlies learning and memory by strengthening or weakening neural connections.",
+    "Black holes have gravity so strong that not even light can escape beyond the event horizon.",
+    "Einstein's theory of general relativity describes gravity as the curvature of spacetime.",
+    "Quantum entanglement links particles so their states remain correlated regardless of distance.",
+    "The Higgs boson gives fundamental particles their mass through interaction with the Higgs field.",
+    "Maxwell's equations unify electricity and magnetism into a single electromagnetic framework.",
+    "The speed of light in a vacuum is approximately 299,792 kilometres per second.",
+    "Entropy in thermodynamics measures the degree of disorder in a closed system, always increasing.",
+    "Neural networks learn by adjusting weights through backpropagation using gradient descent.",
+    "Deep reinforcement learning agents learn optimal policies by maximising cumulative reward signals.",
+    "The Turing test evaluates machine intelligence by testing whether a human can distinguish it.",
+    "Plate tectonics describes the movement of Earth's lithospheric plates, causing earthquakes.",
+    "Ocean currents are driven by temperature gradients, salinity differences, and Earth's rotation.",
+    "The carbon cycle moves carbon through the atmosphere, oceans, and living organisms.",
+    "The French Revolution began in 1789 and ultimately led to the rise of Napoleon Bonaparte."
+  ],
+  "chatKb": [
+    "Hello. How can I help you today?",
+    "If you ask a short question, I may ask a clarifying question to be sure I understand.",
+    "If you say a single word like a food name, you might be expressing a need or request.",
+    "If you say a food name, you might mean you want to eat it.",
+    "If you say a food name to someone who has it, you might be asking them to share it.",
+    "If you want something, you can say: I want bread.",
+    "If you are requesting something from someone, you can say: Could you give me bread?",
+    "If you already possess something, you can say: I have bread.",
+    "If you are hungry, you can say: I am hungry.",
+    "If you are bored, you can say what kind of activity you want: rest, talk, learn, or plan something.",
+    "If you are bored, you can try a small task: take a short walk, tidy one thing, or write down a goal for today.",
+    "If you ask: How do you feel, I can describe my current state as a program and ask how you feel.",
+    "If you ask: Who are you, I can explain that I am a text-based system that uses stored memories to respond.",
+    "If you ask: Who am I, I cannot know personal details unless you tell me, but I can ask what you want to be called.",
+    "If you ask about the weather today, I may not know your location, so I can ask where you are.",
+    "If you want the current weather, you can check a local forecast source and tell me what you see.",
+    "If you want to talk, you can share what is on your mind in one sentence.",
+    "If you want advice, you can say what you tried and what outcome you want.",
+    "If you are in pain, you can say where it hurts and how long it has hurt.",
+    "If you have a headache, it may help to rest, drink water, and reduce bright light.",
+    "If you have a headache, describe how severe it is, where it is located, and whether it started suddenly.",
+    "If a headache is sudden and severe, or you have confusion, weakness, fainting, or chest pain, seek urgent medical care.",
+    "If your stomach aches, it can help to note when it started, whether you have nausea, vomiting, fever, or diarrhea.",
+    "If stomach pain is severe, persistent, or comes with fever or dehydration, consider contacting a clinician.",
+    "If there is an emergency like a fire, call local emergency services and get to safety.",
+    "I can help with general information, but I am not a doctor.",
+    "I can help you plan next steps by asking what you have tried and what you want to achieve.",
+    "When you describe a problem, include what happened, what you expected, and any error message."
+  ],
+  "expansions": {
+    "who": [
+      "identity",
+      "assistant",
+      "system"
+    ],
+    "bored": [
+      "activity",
+      "plan",
+      "talk"
+    ],
+    "feel": [
+      "state",
+      "mood"
+    ],
+    "headache": [
+      "pain",
+      "rest",
+      "water"
+    ],
+    "stomach": [
+      "pain",
+      "nausea",
+      "fever",
+      "diarrhea"
+    ],
+    "learn": [
+      "neural",
+      "train",
+      "weights",
+      "backprop",
+      "gradient"
+    ],
+    "machine": [
+      "neural",
+      "network",
+      "algorithm",
+      "learning",
+      "gradient"
+    ],
+    "machines": [
+      "neural",
+      "network",
+      "algorithm",
+      "learning"
+    ],
+    "ai": [
+      "neural",
+      "network",
+      "learning",
+      "intelligence",
+      "turing"
+    ],
+    "computer": [
+      "turing",
+      "algorithm",
+      "neural",
+      "computation"
+    ],
+    "robot": [
+      "neural",
+      "algorithm",
+      "reinforcement",
+      "learning"
+    ],
+    "policy": [
+      "reinforcement",
+      "reward",
+      "agent",
+      "learning"
+    ],
+    "infection": [
+      "pathogen",
+      "bacteria",
+      "virus",
+      "immune",
+      "antibody"
+    ],
+    "fight": [
+      "immune",
+      "antibody",
+      "neutralize",
+      "defend"
+    ],
+    "sick": [
+      "pathogen",
+      "bacteria",
+      "virus",
+      "immune",
+      "disease"
+    ],
+    "disease": [
+      "pathogen",
+      "bacteria",
+      "virus",
+      "immune",
+      "antibody"
+    ],
+    "body": [
+      "immune",
+      "cell",
+      "organism",
+      "biological",
+      "synapse"
+    ],
+    "brain": [
+      "neuron",
+      "synapse",
+      "neurotransmitter",
+      "plasticity"
+    ],
+    "mind": [
+      "neuron",
+      "synapse",
+      "neurotransmitter",
+      "cognitive"
+    ],
+    "gene": [
+      "dna",
+      "rna",
+      "crispr",
+      "chromosome",
+      "genome"
+    ],
+    "evolution": [
+      "dna",
+      "gene",
+      "mutation",
+      "selection",
+      "helix"
+    ],
+    "medicine": [
+      "antibiotic",
+      "vaccine",
+      "immune",
+      "pathogen"
+    ],
+    "drug": [
+      "antibiotic",
+      "bacteria",
+      "cell",
+      "protein"
+    ],
+    "cell": [
+      "mitochondria",
+      "atp",
+      "membrane",
+      "nucleus"
+    ],
+    "energy": [
+      "atp",
+      "mitochondria",
+      "photosynthesis",
+      "entropy"
+    ],
+    "plants": [
+      "photosynthesis",
+      "glucose",
+      "sunlight",
+      "carbon"
+    ],
+    "food": [
+      "photosynthesis",
+      "glucose",
+      "sunlight",
+      "carbon"
+    ],
+    "gravity": [
+      "spacetime",
+      "relativity",
+      "curvature",
+      "einstein"
+    ],
+    "black": [
+      "hole",
+      "event",
+      "horizon",
+      "escape",
+      "gravity"
+    ],
+    "hole": [
+      "black",
+      "event",
+      "horizon",
+      "gravity",
+      "escape"
+    ],
+    "space": [
+      "spacetime",
+      "relativity",
+      "quantum",
+      "cosmos"
+    ],
+    "universe": [
+      "spacetime",
+      "relativity",
+      "quantum",
+      "cosmology"
+    ],
+    "atom": [
+      "quantum",
+      "particle",
+      "electron",
+      "proton",
+      "higgs"
+    ],
+    "particle": [
+      "quantum",
+      "higgs",
+      "boson",
+      "electron",
+      "field"
+    ],
+    "electricity": [
+      "maxwell",
+      "electromagnetic",
+      "charge",
+      "magnet"
+    ],
+    "magnet": [
+      "maxwell",
+      "electromagnetic",
+      "field",
+      "current"
+    ],
+    "wave": [
+      "electromagnetic",
+      "light",
+      "maxwell",
+      "quantum"
+    ],
+    "light": [
+      "photon",
+      "electromagnetic",
+      "speed",
+      "vacuum"
+    ],
+    "temperature": [
+      "entropy",
+      "thermodynamics",
+      "heat",
+      "disorder"
+    ],
+    "disorder": [
+      "entropy",
+      "thermodynamics",
+      "system"
+    ],
+    "earthquake": [
+      "tectonic",
+      "plate",
+      "lithosphere",
+      "seismic"
+    ],
+    "earthquakes": [
+      "tectonic",
+      "plate",
+      "lithosphere",
+      "seismic"
+    ],
+    "cause": [
+      "tectonic",
+      "plate",
+      "lithosphere"
+    ],
+    "volcano": [
+      "tectonic",
+      "plate",
+      "lithosphere",
+      "mantle"
+    ],
+    "ocean": [
+      "current",
+      "salinity",
+      "temperature",
+      "gradient"
+    ],
+    "climate": [
+      "carbon",
+      "atmosphere",
+      "ocean",
+      "cycle"
+    ],
+    "weather": [
+      "forecast",
+      "location",
+      "ocean",
+      "atmosphere",
+      "pressure",
+      "temperature"
+    ]
+  },
+  "prompts": [
+    "hello",
+    "I am bored",
+    "What is the weather today",
+    "How do you feel",
+    "Who are you",
+    "Who am I",
+    "I have headache",
+    "My stomach aches",
+    "How does DNA replication work?"
+  ]
+}

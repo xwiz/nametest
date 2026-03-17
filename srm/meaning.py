@@ -54,9 +54,59 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, field
-from functools import lru_cache
 
 import numpy as np
+
+from .config import STOPWORDS
+
+# Sentinel token injected between original query and expansion terms.
+# Used by _detect_svo to reset the SVO state so expansion tokens
+# don't inherit the verb context from the original query.
+_EXPANSION_SENTINEL = "__xexp__"
+
+
+# ── Shared verb canonicalisation ────────────────────────────────────────────
+
+def canonical_verb(
+    tok: str,
+    known_verbs: set[str],
+    *,
+    allow_frame_verbs: bool = False,
+) -> str | None:
+    """Return the canonical verb form found in *known_verbs*, or None.
+
+    Applies minimal heuristic lemmatisation (strips -ing, -ed, -es, -s)
+    so inflected forms map to the base verb stored in the meaning DB.
+
+    When *allow_frame_verbs* is True, copular/auxiliary verbs
+    (is, are, was, were, have, has, had) are also accepted.
+    """
+    _FRAME_VERBS = {"is", "are", "was", "were", "have", "has", "had"}
+    t = tok.lower().strip()
+    if not t:
+        return None
+    if allow_frame_verbs and t in _FRAME_VERBS:
+        return t
+    if t in STOPWORDS or len(t) < 3:
+        return None
+    if t in known_verbs:
+        return t
+    candidates: list[str] = []
+    if t.endswith("ing") and len(t) > 5:
+        stem = t[:-3]
+        candidates.extend([stem, stem + "e"])
+    if t.endswith("ed") and len(t) > 4:
+        stem = t[:-2]
+        candidates.extend([stem, stem + "e"])
+    if t.endswith("es") and len(t) > 4:
+        stem = t[:-2]
+        candidates.extend([stem, stem + "e"])
+    if t.endswith("s") and len(t) > 3:
+        candidates.append(t[:-1])
+    for c in candidates:
+        if c in known_verbs and c not in STOPWORDS and len(c) >= 3:
+            return c
+    return None
 
 
 # ── Adjective weight multipliers (hardcoded; no JSON source needed) ──────────
@@ -113,13 +163,6 @@ ADJ_MULTIPLIERS: dict[str, float] = {
     "un":           -1.0,
 }
 
-# Simple heuristic content-word POS signals: if a token ends with one of
-# these suffixes it is likely a noun/adjective and a candidate object.
-_NOUN_SUFFIXES = (
-    "tion", "sion", "ment", "ness", "ity", "ism", "ist",
-    "sis", "ase", "ose", "ine", "ide", "ate", "oma",
-)
-
 
 # ── Data container ────────────────────────────────────────────────────────────
 
@@ -165,12 +208,14 @@ class MeaningDB:
                   self._conn.execute(
                       "SELECT name FROM sqlite_master WHERE type='table'"
                   ).fetchall()}
-        required = {"verbs", "polarity_classes", "verb_polarity"}
+        required = {"verbs"}
         if not required.issubset(tables):
             raise RuntimeError(
                 f"meaning.db is missing tables {required - tables}. "
                 "Run scripts/build_meaning_db.py first."
             )
+        self._verb_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(verbs)").fetchall()}
+        self._has_direct_mask = {"polarity_label", "polarity_mask"}.issubset(self._verb_cols)
 
     # ── Lookups ───────────────────────────────────────────────────────
 
@@ -180,30 +225,42 @@ class MeaningDB:
         if v in self._verb_cache:
             return self._verb_cache[v]
 
-        row = self._conn.execute(
-            "SELECT verb, polarity_class, polarity_mask "
-            "FROM verb_meaning WHERE verb=?", (v,)
-        ).fetchone()
+        if self._has_direct_mask:
+            row = self._conn.execute(
+                "SELECT id, verb, polarity_label AS polarity_class, polarity_mask "
+                "FROM verbs WHERE verb=?",
+                (v,),
+            ).fetchone()
+        else:
+            row = self._conn.execute(
+                "SELECT verb, polarity_class, polarity_mask "
+                "FROM verb_meaning WHERE verb=?", (v,)
+            ).fetchone()
 
         if row is None:
             self._verb_cache[v] = None
             return None
 
+        verb_id = row["id"] if self._has_direct_mask else self._conn.execute(
+            "SELECT id FROM verbs WHERE verb=?",
+            (v,),
+        ).fetchone()[0]
+
         goals = [r[0] for r in self._conn.execute(
-            "SELECT goal FROM verb_goals WHERE verb_id="
-            "(SELECT id FROM verbs WHERE verb=?)", (v,)
+            "SELECT goal FROM verb_goals WHERE verb_id=?",
+            (verb_id,)
         ).fetchall()]
 
         mechs = [r[0] for r in self._conn.execute(
-            "SELECT mechanism FROM verb_mechanisms WHERE verb_id="
-            "(SELECT id FROM verbs WHERE verb=?)", (v,)
+            "SELECT mechanism FROM verb_mechanisms WHERE verb_id=?",
+            (verb_id,)
         ).fetchall()]
 
         final_obj = [r[0] for r in self._conn.execute(
             """SELECT state_value FROM state_transforms
-               WHERE verb_id=(SELECT id FROM verbs WHERE verb=?)
+               WHERE verb_id=?
                AND role='object' AND phase='final' AND dimension='physical'""",
-            (v,)
+            (verb_id,)
         ).fetchall()]
 
         mask = np.frombuffer(row["polarity_mask"], dtype=np.uint8).copy()
@@ -224,6 +281,8 @@ class MeaningDB:
         vm = self.get_verb(verb)
         return vm.polarity_mask if vm else None
 
+    get_mask = get_polarity_mask
+
     def known_verbs(self) -> set[str]:
         """Return the full set of verbs in the DB (cached after first call)."""
         if self._known is None:
@@ -233,6 +292,10 @@ class MeaningDB:
 
     def class_mask(self, class_name: str) -> np.ndarray | None:
         """Return the bitmask for a polarity class by name."""
+        if not self._conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='polarity_classes'"
+        ).fetchone():
+            return None
         row = self._conn.execute(
             "SELECT bitmask FROM polarity_classes WHERE name=?", (class_name,)
         ).fetchone()
@@ -275,7 +338,12 @@ def _detect_svo(
     current_obj:  list[str]  = []
 
     for tok in tokens:
-        if tok in known_verbs:
+        if tok == _EXPANSION_SENTINEL:
+            result.append((current_verb, current_obj))
+            current_verb = None
+            current_obj  = []
+            continue
+        if canonical_verb(tok, known_verbs) is not None:
             result.append((current_verb, current_obj))
             current_verb = tok
             current_obj  = []
@@ -322,7 +390,8 @@ def apply_meaning(
         # Look up the mask once per verb (None for unknown verbs)
         mask: np.ndarray | None = None
         if verb_tok is not None:
-            mask = db.get_polarity_mask(verb_tok)
+            canon = canonical_verb(verb_tok, known)
+            mask = db.get_polarity_mask(canon) if canon else None
             # Add the verb itself as a high-weight unmasked token
             w_verb = 2.5 * idf.get(verb_tok, 1.0)
             result.append((verb_tok, w_verb, None))
@@ -362,3 +431,93 @@ def describe_verb(verb: str, db: MeaningDB) -> str:
         f"  goals: {goals}"
         f"  → object ends: {states}"
     )
+
+
+def extract_meaning(text: str, db: MeaningDB | None = None) -> dict:
+    from .nlp import tokenise
+
+    toks = tokenise(text)
+    alerts: list[dict] = []
+
+    def _nearest_content_left(idx: int) -> str | None:
+        for j in range(idx - 1, -1, -1):
+            t = toks[j]
+            if t in STOPWORDS:
+                continue
+            if t in ("is", "are", "was", "were"):
+                continue
+            return t
+        return None
+
+    if "fire" in toks and ("on" in toks or "burn" in toks or "burning" in toks):
+        ent = None
+        try:
+            i = toks.index("fire")
+            ent = _nearest_content_left(i)
+        except ValueError:
+            ent = None
+        alerts.append({"type": "fire", "entity": ent})
+
+    known = db.known_verbs() if db is not None else set()
+
+    def _content(xs: list[str]) -> list[str]:
+        return [x for x in xs if x not in STOPWORDS]
+
+    frames: list[dict] = []
+    subject_buf: list[str] = []
+    current_subject: list[str] = []
+    current_verb: str | None = None
+    current_verb_canon: str | None = None
+    obj_buf: list[str] = []
+
+    for tok in toks:
+        canon = canonical_verb(tok, known, allow_frame_verbs=True)
+        if canon is not None:
+            if current_verb is not None:
+                pc = None
+                if db is not None and current_verb_canon is not None:
+                    vm = db.get_verb(current_verb_canon)
+                    pc = vm.polarity_class if vm else None
+                frames.append({
+                    "subject": _content(current_subject),
+                    "verb": current_verb,
+                    "verb_canonical": current_verb_canon,
+                    "polarity_class": pc,
+                    "object": _content(obj_buf),
+                })
+                obj_buf = []
+                if subject_buf:
+                    current_subject = subject_buf
+                subject_buf = []
+            else:
+                current_subject = subject_buf
+                subject_buf = []
+
+            current_verb = tok
+            current_verb_canon = canon
+            continue
+
+        if current_verb is None:
+            subject_buf.append(tok)
+        else:
+            obj_buf.append(tok)
+
+    if current_verb is not None:
+        pc = None
+        if db is not None and current_verb_canon is not None:
+            vm = db.get_verb(current_verb_canon)
+            pc = vm.polarity_class if vm else None
+        frames.append({
+            "subject": _content(current_subject),
+            "verb": current_verb,
+            "verb_canonical": current_verb_canon,
+            "polarity_class": pc,
+            "object": _content(obj_buf),
+        })
+
+    return {
+        "text": text,
+        "tokens": toks,
+        "alerts": alerts,
+        "frames": frames,
+    }
