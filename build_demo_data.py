@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from srm import __version__
-from srm.config import CHAT_KB, EXPANSIONS, SAMPLE_KB
+from srm.config import CHAT_KB, DEMO_CONFIG, EXPANSIONS, JS_KB, SAMPLE_KB
 
 
 DEMO_PROMPTS = [
@@ -17,6 +17,9 @@ DEMO_PROMPTS = [
     "I have headache",
     "My stomach aches",
     "How does DNA replication work?",
+    "write javascript code to fetch json from an api",
+    "write js code to filter active users",
+    "write javascript code to update an object without mutation",
 ]
 
 
@@ -27,6 +30,8 @@ def main() -> None:
         "version": __version__,
         "sampleKb": SAMPLE_KB,
         "chatKb": CHAT_KB,
+        "jsKb": JS_KB,
+        "demoConfig": DEMO_CONFIG,
         "expansions": EXPANSIONS,
         "prompts": DEMO_PROMPTS,
     }

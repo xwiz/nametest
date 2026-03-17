@@ -1,81 +1,53 @@
 # SRM — Stochastic Resonance Memory
 
-A small algorithmic memory-and-response system built with **Python + SQLite + NumPy**.
+A small CPU-friendly memory-and-response system built with **Python + SQLite + NumPy**.
 
-It stores lines of text as binary SimHash-style codes, retrieves memories through stochastic Hamming-space search, and assembles responses without using an LLM.
+The goal of this MVP is simple:
 
-## Why this approach is novel
+- **show that a specialized LLM-style system can run locally on CPU**
+- **handle only narrow tasks by searching explicit memories**
+- **use stochastic search plus meaning inference to separate relevant memories**
+- **reconstruct responses from fragments instead of free-form token generation**
 
-Most modern chat systems are built around **generative pretrained transformers**: large neural networks that compress vast training corpora into model weights, then generate the next token autoregressively.
+SRM is not trying to compete with a frontier transformer.
+It is trying to demonstrate that for specific tasks, you can get useful behaviour from:
 
-This project explores a very different path:
+- **explicit knowledge rows instead of giant hidden weights**
+- **stochastic search in Hamming space instead of full neural generation**
+- **meaning inference from verbs, nouns, and polarity masks**
+- **response reconstruction from retrieved fragments**
 
-- **Explicit memory instead of hidden weights**
-  - Knowledge stays as inspectable text rows in SQLite.
-  - You can list, delete, seed, and audit exactly what the system knows.
+That makes the system:
 
-- **Algorithmic retrieval instead of forward-passing a giant model**
+- **inspectable**
+- **editable**
+- **cheap to run**
+- **easy to debug when behaviour changes**
+
+## MVP shape
+
+- **Memory**
+  - Knowledge is stored as explicit text memories in SQLite.
+  - You can inspect, add, delete, or replace memories directly.
+
+- **Search**
   - Queries are encoded into 128-bit SimHash-style codes.
-  - Retrieval happens through noisy stochastic traversal in Hamming space, then TF-IDF re-ranking.
+  - Retrieval uses noisy stochastic traversal plus TF-IDF re-ranking.
 
-- **Meaning-aware masking instead of dense latent semantics**
-  - Optional `meaning.db` injects verb-driven polarity masks derived from final object states.
-  - That lets the system separate semantically different actions without training a neural embedding model.
+- **Meaning inference**
+  - Optional `meaning.db` applies verb-driven polarity masking.
+  - This helps separate actions with different meanings that share similar nouns.
 
-- **Constructive response assembly instead of free-form token generation**
-  - Responses are synthesised from retrieved memories or reconstructed from cast outputs.
-  - The system is valuable precisely because you can inspect which source memories were used.
-
-- **Small-data, controllable adaptation instead of large-scale pretraining**
-  - You improve behaviour by editing KB lines, expansions, polarity knowledge, or safe learning rules.
-  - That makes failures easier to diagnose than in opaque neural model weights.
-
-## How SRM differs from generative pretrained transformers
-
-| Dimension | SRM | Generative pretrained transformers |
-| --- | --- | --- |
-| Core mechanism | Retrieval + stochastic traversal + synthesis | Neural next-token generation |
-| Knowledge storage | Explicit text memories in SQLite | Implicitly compressed into model parameters |
-| Inspectability | High: list exact memories and attractors | Low: weights are not human-auditable knowledge units |
-| Update path | Add/edit/delete memories or rules | Fine-tune, retrain, or rely on prompting/RAG layers |
-| Failure mode | Misses, weak retrieval, over-literal stitching | Hallucination, drifting generations, opaque errors |
-| Resource profile | Small CPU-friendly Python process | Usually much larger RAM/VRAM + model runtime |
-| Determinism | Reproducible with fixed seed | Often only partially reproducible |
-| Best use case | Transparent local memory/retrieval experiments | Broad generative reasoning and language coverage |
-
-## Example outputs, inferred-data share, and runtime footprint
-
-`Inferred data %` below is an **approximate** measure of how much of the final response is assembled by the pipeline rather than copied verbatim from one single memory line. High percentages usually mean stronger synthesis/reconstruction; low percentages mean the system found a very direct memory and mostly returned it.
-
-All examples below are from the current local pipeline shape and are intended to illustrate the system's value proposition: **small, transparent, inspectable inference with modest resources**.
-
-| Input | Example response shape | Approx. inferred data % | What produced the answer | Typical resources to run |
-| --- | --- | ---: | --- | --- |
-| `Who are you` | `If you ask: Who are you, I can explain that I am a text-based system that uses stored memories to respond.` | 5-10% | Mostly a direct chat memory retrieval | CPU only, Python + NumPy + SQLite, local DB with tens of rows |
-| `I have headache` | `If you have a headache, it may help to rest, drink water, and reduce bright light. Furthermore, ... seek urgent medical care. Altogether, ... say where it hurts ...` | 45-65% | Multiple retrieved memories stitched by synthesis connectives and selection | CPU only, same stack, local DB with tens of rows |
-| `How does DNA replication work?` | `DNA replication copies genetic material before cell division using complementary base pairing and polymerase enzymes. Furthermore, ...` | 35-55% | One direct science memory plus supporting retrieved lines | CPU only, same stack, local DB with tens of rows |
-| Fragment-style KB query | Several short cast-selected facts merged into one reply | 60-80% | Cast-level reconstruction from unique noisy traversals | CPU only, same stack, local DB with fragment memories |
-
-## Performance / resource difference at a glance
-
-| System style | Typical runtime requirements | Knowledge transparency | Response generation cost |
-| --- | --- | --- | --- |
-| SRM | Standard local Python environment, SQLite file, NumPy, no GPU required | High | Retrieval + ranking + assembly over a small explicit KB |
-| GPT-style transformer | Model weights, inference runtime, often remote serving or substantial local RAM/VRAM | Low to medium | Full neural forward pass over a large pretrained model |
-
-SRM is **not** trying to out-generate a frontier transformer.
-Its novelty is that it offers a practical, inspectable alternative for local memory experiments where:
-
-- **you want to know why an answer happened**
-- **you want to change behaviour by editing knowledge directly**
-- **you want small-resource execution without heavyweight model serving**
-- **you want retrieval and response assembly to be auditable end-to-end**
+- **Response generation**
+  - `synth` assembles sentence-style responses from retrieved memories.
+  - `reconstruct` works better for fragment-style KBs.
+  - `auto` tries both and keeps the stronger output.
 
 ## Browser demo
 
 - **[Open browser demo](https://htmlpreview.github.io/?https://raw.githubusercontent.com/xwiz/nametest/main/docs/index.html)**
 
-The browser demo uses the current built-in demo KB and vocabulary expansions exported from this repo.
+The browser demo uses the current built-in chat, JavaScript, and sample KBs plus exported query expansions.
 
 ## What the current system does
 

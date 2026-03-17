@@ -166,21 +166,21 @@
       <div class="card">
         <h1 class="title">SRM browser demo</h1>
         <p class="subtitle">
-          A lightweight browser demo built from the current repo's built-in sample KB, chat KB,
-          and query expansions. It runs fully client-side so you can open it from GitHub.
+          An MVP showing that a specialized LLM-style system can run on CPU for narrow tasks by using
+          stochastic search, meaning-aware retrieval, and response reconstruction over explicit memories.
         </p>
         <div class="badges">
-          <span class="badge">No backend</span>
-          <span class="badge">Built-in KBs</span>
-          <span class="badge">Query expansion</span>
-          <span class="badge">Synthesis + reconstruction style output</span>
+          <span class="badge">CPU-friendly MVP</span>
+          <span class="badge">Specialized tasks</span>
+          <span class="badge">Explicit KBs</span>
+          <span class="badge">Stochastic search + reconstruction</span>
         </div>
       </div>
       <div class="card">
         <h3>What to try</h3>
         <div id="promptList" class="prompt-list"></div>
         <p class="small" style="margin-top:14px;">
-          For the full Python system, use <code>python main.py --seed-chat --mode auto</code> or
+          For the full Python system, use <code>python main.py --seed-chat --seed-js --mode auto</code> or
           attach <code>meaning.db</code> with <code>--meaning-db meaning.db</code>.
         </p>
       </div>
@@ -189,15 +189,16 @@
     <section class="grid">
       <div class="card">
         <label for="query">Query</label>
-        <textarea id="query" placeholder="Ask something like: Who are you, I am bored, or I have headache"></textarea>
+        <textarea id="query" placeholder="Ask something like: Who are you, I am bored, or write javascript code to fetch json"></textarea>
 
         <div class="row" style="margin-top:12px;">
           <div>
             <label for="dataset">Demo memory set</label>
             <select id="dataset">
               <option value="chat">Chat KB</option>
+              <option value="js">JavaScript KB</option>
               <option value="sample">Science sample KB</option>
-              <option value="both" selected>Both</option>
+              <option value="all" selected>All KBs</option>
             </select>
           </div>
           <div>
@@ -213,6 +214,46 @@
         <div class="row" style="margin-top:12px;">
           <button id="runBtn">Run demo</button>
           <button id="clearBtn" class="secondary">Clear</button>
+        </div>
+
+        <div style="margin-top:16px;">
+          <h3 style="margin:0 0 10px;">Tunable demo config</h3>
+          <div class="row">
+            <div>
+              <label for="cfgScoreFloor">Score floor</label>
+              <input id="cfgScoreFloor" type="number" min="0" max="1" step="0.01">
+            </div>
+            <div>
+              <label for="cfgSelectionLimit">Selection limit</label>
+              <input id="cfgSelectionLimit" type="number" min="1" max="12" step="1">
+            </div>
+          </div>
+          <div class="row" style="margin-top:12px;">
+            <div>
+              <label for="cfgReconstructLimit">Reconstruct limit</label>
+              <input id="cfgReconstructLimit" type="number" min="1" max="12" step="1">
+            </div>
+            <div>
+              <label for="cfgSynthLimit">Synth limit</label>
+              <input id="cfgSynthLimit" type="number" min="1" max="12" step="1">
+            </div>
+          </div>
+          <div class="row" style="margin-top:12px;">
+            <div>
+              <label for="cfgOverlapFloor">Overlap floor</label>
+              <input id="cfgOverlapFloor" type="number" min="1" max="12" step="1">
+            </div>
+            <div>
+              <label for="cfgOverlapRatio">Overlap ratio</label>
+              <input id="cfgOverlapRatio" type="number" min="0" max="1" step="0.05">
+            </div>
+          </div>
+          <div class="row" style="margin-top:12px;">
+            <div>
+              <label for="cfgAutoAvgWords">Auto reconstruct below avg words</label>
+              <input id="cfgAutoAvgWords" type="number" min="1" max="40" step="1">
+            </div>
+          </div>
         </div>
       </div>
 
@@ -232,7 +273,7 @@
         <h3>Notes</h3>
         <p class="small">
           This page uses the same built-in KB content and expansions exported from the repo, but it is a
-          browser-safe demo rather than the full Python stochastic-cast engine.
+          browser-safe approximation of the Python MVP rather than the full stochastic cast engine.
         </p>
         <p class="small">
           Best repo entry points:
@@ -240,6 +281,7 @@
         <ul class="small">
           <li><code>python main.py --seed --mode auto</code></li>
           <li><code>python main.py --seed-chat --mode auto --auto-learn</code></li>
+          <li><code>python main.py --seed-js --mode auto</code></li>
           <li><code>python build_meaning_db.py --src data/verbs --db meaning.db --fresh --report</code></li>
         </ul>
       </div>
@@ -251,6 +293,15 @@
       'the','a','an','is','are','was','were','in','of','to','and','or','it','its','this','that','these','those','be','been','by','for','with','on','at','from','as','into','through','during','before','after','above','below','between','each','few','more','most','other','some','such','no','nor','not','only','own','same','so','than','too','very','can','will','just','should','now','have','has','had','do','does','did','would','could','may','might','also','which','who','how','what','when','where','why','about','used','using','their','they','them','we','us','you','he','she','his','her','all','any'
     ]);
     const CONNECTIVES = ['Additionally, ', 'Furthermore, ', 'In summary, '];
+    const DEFAULT_DEMO_CONFIG = {
+      score_floor: 0.01,
+      selection_limit: 4,
+      reconstruct_limit: 3,
+      synth_limit: 3,
+      overlap_floor: 3,
+      overlap_ratio: 0.6,
+      auto_reconstruct_avg_words_below: 11,
+    };
 
     function tokenise(text) {
       return (text.toLowerCase().match(/[a-z]+/g) || []).filter(w => w.length > 1);
@@ -316,7 +367,43 @@
       return q.size ? hits / q.size : 0;
     }
 
-    function selectMemories(query, corpus, expansions) {
+    function getDemoConfig(data) {
+      const raw = { ...DEFAULT_DEMO_CONFIG, ...(data.demoConfig || {}) };
+      return {
+        score_floor: Number(raw.score_floor),
+        selection_limit: Number(raw.selection_limit),
+        reconstruct_limit: Number(raw.reconstruct_limit),
+        synth_limit: Number(raw.synth_limit),
+        overlap_floor: Number(raw.overlap_floor),
+        overlap_ratio: Number(raw.overlap_ratio),
+        auto_reconstruct_avg_words_below: Number(raw.auto_reconstruct_avg_words_below),
+      };
+    }
+
+    function syncConfigInputs(config) {
+      document.getElementById('cfgScoreFloor').value = config.score_floor;
+      document.getElementById('cfgSelectionLimit').value = config.selection_limit;
+      document.getElementById('cfgReconstructLimit').value = config.reconstruct_limit;
+      document.getElementById('cfgSynthLimit').value = config.synth_limit;
+      document.getElementById('cfgOverlapFloor').value = config.overlap_floor;
+      document.getElementById('cfgOverlapRatio').value = config.overlap_ratio;
+      document.getElementById('cfgAutoAvgWords').value = config.auto_reconstruct_avg_words_below;
+    }
+
+    function readConfigFromInputs(data) {
+      const config = getDemoConfig(data);
+      return {
+        score_floor: Number(document.getElementById('cfgScoreFloor').value || config.score_floor),
+        selection_limit: Number(document.getElementById('cfgSelectionLimit').value || config.selection_limit),
+        reconstruct_limit: Number(document.getElementById('cfgReconstructLimit').value || config.reconstruct_limit),
+        synth_limit: Number(document.getElementById('cfgSynthLimit').value || config.synth_limit),
+        overlap_floor: Number(document.getElementById('cfgOverlapFloor').value || config.overlap_floor),
+        overlap_ratio: Number(document.getElementById('cfgOverlapRatio').value || config.overlap_ratio),
+        auto_reconstruct_avg_words_below: Number(document.getElementById('cfgAutoAvgWords').value || config.auto_reconstruct_avg_words_below),
+      };
+    }
+
+    function selectMemories(query, corpus, expansions, config) {
       const expanded = expandQuery(query, expansions);
       const idf = idfTable(corpus);
       const qVec = tfidfVec(tokenise(expanded), idf);
@@ -329,10 +416,10 @@
         const score = 0.7 * cos + 0.3 * overlap;
         return { idx, text, cos, overlap, score };
       }).sort((a, b) => b.score - a.score);
-      return { expanded, picked: ranked.filter(x => x.score > 0.01).slice(0, 4) };
+      return { expanded, picked: ranked.filter(x => x.score > config.score_floor).slice(0, config.selection_limit) };
     }
 
-    function synthesise(query, picked) {
+    function synthesise(query, picked, config) {
       if (!picked.length) return 'No relevant memories found in the selected demo KB.';
       const lines = picked.map(x => x.text.trim()).filter(Boolean);
       if (!lines.length) return 'No relevant memories found in the selected demo KB.';
@@ -343,24 +430,24 @@
           const pt = new Set(tokenise(prev));
           let overlap = 0;
           for (const t of lt) if (pt.has(t)) overlap += 1;
-          return overlap >= Math.max(3, Math.floor(lt.size * 0.6));
+          return overlap >= Math.max(config.overlap_floor, Math.floor(lt.size * config.overlap_ratio));
         });
         if (!redundant) chosen.push(line);
-        if (chosen.length >= 3) break;
+        if (chosen.length >= config.synth_limit) break;
       }
       if (chosen.length === 1) return chosen[0];
       return chosen.map((line, i) => i === 0 ? line : `${CONNECTIVES[(i - 1) % CONNECTIVES.length]}${line.charAt(0).toLowerCase()}${line.slice(1)}`).join(' ');
     }
 
-    function reconstruct(picked) {
+    function reconstruct(picked, config) {
       if (!picked.length) return 'No relevant memories found in the selected demo KB.';
-      return picked.map(x => x.text.trim()).slice(0, 3).join(' ');
+      return picked.map(x => x.text.trim()).slice(0, config.reconstruct_limit).join(' ');
     }
 
-    function chooseMode(picked, forcedMode) {
+    function chooseMode(picked, forcedMode, config) {
       if (forcedMode !== 'auto') return forcedMode;
       const avgWords = picked.length ? picked.reduce((n, x) => n + tokenise(x.text).length, 0) / picked.length : 0;
-      return avgWords < 8 ? 'reconstruct' : 'synth';
+      return avgWords < config.auto_reconstruct_avg_words_below ? 'reconstruct' : 'synth';
     }
 
     function render(result) {
@@ -388,6 +475,7 @@
     async function boot() {
       const res = await fetch('./demo-data.json');
       const data = await res.json();
+      syncConfigInputs(getDemoConfig(data));
       const promptList = document.getElementById('promptList');
       for (const prompt of data.prompts) {
         const btn = document.createElement('button');
@@ -401,7 +489,7 @@
       }
 
       document.getElementById('response').textContent = 'Ready. Pick a prompt or type your own query.';
-      document.getElementById('meta').innerHTML = `<div class="status">Demo data loaded</div><div>Version ${data.version}</div>`;
+      document.getElementById('meta').innerHTML = `<div class="status">Demo data loaded</div><div>Version ${data.version}</div><div>Config source: <code>demoConfig</code></div>`;
 
       document.getElementById('runBtn').onclick = () => run(data);
       document.getElementById('clearBtn').onclick = () => {
@@ -420,11 +508,18 @@
       }
       const dataset = document.getElementById('dataset').value;
       const forcedMode = document.getElementById('mode').value;
-      const corpus = dataset === 'chat' ? data.chatKb : dataset === 'sample' ? data.sampleKb : data.chatKb.concat(data.sampleKb);
-      const { expanded, picked } = selectMemories(query, corpus, data.expansions);
-      const mode = chooseMode(picked, forcedMode);
-      const response = mode === 'reconstruct' ? reconstruct(picked) : synthesise(query, picked);
-      render({ version: data.version, expanded, picked, response, mode });
+      const config = readConfigFromInputs(data);
+      const corpus = dataset === 'chat'
+        ? data.chatKb
+        : dataset === 'js'
+        ? data.jsKb
+        : dataset === 'sample'
+        ? data.sampleKb
+        : data.chatKb.concat(data.jsKb, data.sampleKb);
+      const { expanded, picked } = selectMemories(query, corpus, data.expansions, config);
+      const mode = chooseMode(picked, forcedMode, config);
+      const response = mode === 'reconstruct' ? reconstruct(picked, config) : synthesise(query, picked, config);
+      render({ version: data.version, expanded, picked, response, mode, config });
     }
 
     boot().catch(err => {

@@ -24,6 +24,17 @@ VOTE_FLOOR: int  = 2            # Minimum votes (alternative to cosine gate)
 SIM_THRESH: float = 0.68        # MMR de-duplication threshold
 MAX_WORDS: int    = 120         # Budget for assembled response
 
+# ── Demo heuristic configuration for browser-side tuning ──────────────────────
+DEMO_CONFIG: dict[str, float | int] = {
+    "score_floor": 0.01,
+    "selection_limit": 4,
+    "reconstruct_limit": 3,
+    "synth_limit": 3,
+    "overlap_floor": 3,
+    "overlap_ratio": 0.6,
+    "auto_reconstruct_avg_words_below": 11,
+}
+
 # ── Hybrid scoring weights ────────────────────────────────────────────────────
 W_VOTE: float    = 0.55         # Weight given to stochastic vote share
 W_COS:  float    = 0.45         # Weight given to TF-IDF cosine similarity
@@ -147,6 +158,8 @@ SAMPLE_KB: list[str] = [
 CHAT_KB: list[str] = [
     "Hello. How can I help you today?",
     "If you ask a short question, I may ask a clarifying question to be sure I understand.",
+    "If your request is ambiguous, I can ask one focused clarifying question.",
+    "A good problem report says what happened, what you expected, and what changed.",
     "If you say a single word like a food name, you might be expressing a need or request.",
     "If you say a food name, you might mean you want to eat it.",
     "If you say a food name to someone who has it, you might be asking them to share it.",
@@ -155,14 +168,22 @@ CHAT_KB: list[str] = [
     "If you already possess something, you can say: I have bread.",
     "If you are hungry, you can say: I am hungry.",
     "If you are bored, you can say what kind of activity you want: rest, talk, learn, or plan something.",
-    "If you are bored, you can try a small task: take a short walk, tidy one thing, or write down a goal for today.",
+    "If you are bored, I can help you choose between a quick task, a learning task, or a relaxing task.",
+    "A quick task can be something you finish in under ten minutes.",
+    "A relaxing task can be rest, music, breathing, or a short walk.",
+    "A learning task can be reading one page, practicing one concept, or asking one question.",
     "If you ask: How do you feel, I can describe my current state as a program and ask how you feel.",
+    "If you ask how I work, I can explain that I retrieve memories and assemble a response from them.",
     "If you ask: Who are you, I can explain that I am a text-based system that uses stored memories to respond.",
     "If you ask: Who am I, I cannot know personal details unless you tell me, but I can ask what you want to be called.",
+    "If I do not know something personal about you, I can ask you to provide the missing detail.",
     "If you ask about the weather today, I may not know your location, so I can ask where you are.",
     "If you want the current weather, you can check a local forecast source and tell me what you see.",
     "If you want to talk, you can share what is on your mind in one sentence.",
+    "If you want to talk, I can ask whether you want comfort, ideas, or a plan.",
     "If you want advice, you can say what you tried and what outcome you want.",
+    "If you want a plan, I can break a goal into small next steps.",
+    "Small next steps are easier to start than large vague plans.",
     "If you are in pain, you can say where it hurts and how long it has hurt.",
     "If you have a headache, it may help to rest, drink water, and reduce bright light.",
     "If you have a headache, describe how severe it is, where it is located, and whether it started suddenly.",
@@ -172,105 +193,45 @@ CHAT_KB: list[str] = [
     "If there is an emergency like a fire, call local emergency services and get to safety.",
     "I can help with general information, but I am not a doctor.",
     "I can help you plan next steps by asking what you have tried and what you want to achieve.",
+    "I can respond in different ways depending on which memories are retrieved.",
+    "Different retrieved memories can produce different but still relevant replies.",
+    "If you ask for code help, include the language, the goal, and any error message.",
     "When you describe a problem, include what happened, what you expected, and any error message.",
 ]
 
-# ── JavaScript knowledge base (10 entries) ────────────────────────────────────
+# ── JavaScript knowledge base (fragment-oriented) ─────────────────────────────
 JS_KB: list[str] = [
-    """JavaScript truth: choose clear small functions with explicit inputs and outputs.
-// Use const by default and let only when reassignment is required.
-function solve(input) {
-  const normalized = String(input).trim();
-  if (!normalized) {
-    return '';
-  }
-  return normalized;
-}""",
-    """JavaScript truth: for array transformation prefer map when every item becomes one output item.
-// map returns a new array and does not mutate the original array.
-function pluckNames(items) {
-  return items.map((item) => item.name);
-}""",
-    """JavaScript truth: for filtering prefer filter with a boolean predicate.
-// filter keeps only items that satisfy the condition.
-function getActiveUsers(users) {
-  return users.filter((user) => user.isActive);
-}""",
-    """JavaScript truth: for aggregation prefer reduce with an explicit initial value.
-// The initial value prevents edge cases on empty arrays.
-function sumNumbers(numbers) {
-  return numbers.reduce((total, value) => total + value, 0);
-}""",
-    """JavaScript truth: use a for...of loop when you need readable control flow, early returns, or break.
-// This pattern is often clearer than chaining array helpers for imperative tasks.
-function findFirstLongWord(words) {
-  for (const word of words) {
-    if (word.length > 10) {
-      return word;
-    }
-  }
-  return null;
-}""",
-    """JavaScript truth: use object spread to create updated objects without mutating the original object.
-// This is a safe default for predictable state updates.
-function updateUser(user, updates) {
-  return {
-    ...user,
-    ...updates,
-  };
-}""",
-    """JavaScript truth: destructure only the fields you need and keep the rest intact when useful.
-// Destructuring can make intent clearer in small functions.
-function formatUser(user) {
-  const { id, name, email } = user;
-  return `${id}: ${name} <${email}>`;
-}""",
-    """JavaScript truth: async API calls should use try/catch and validate the HTTP status before parsing.
-// Throw a useful error so callers can decide how to display or recover from it.
-async function fetchJson(url) {
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`);
-    }
-    return await response.json();
-  } catch (error) {
-    throw new Error(`Unable to fetch JSON: ${error.message}`);
-  }
-}""",
-    """JavaScript truth: validate inputs at the edges of a function and fail fast with clear errors.
-// Early guards keep the main path small and easy to read.
-function divide(a, b) {
-  if (typeof a !== 'number' || typeof b !== 'number') {
-    throw new TypeError('divide expects two numbers');
-  }
-  if (b === 0) {
-    throw new Error('Cannot divide by zero');
-  }
-  return a / b;
-}""",
-    """JavaScript truth: when reading nested data, use optional chaining and nullish coalescing for safe defaults.
-// This avoids noisy defensive checks and preserves valid falsy values like 0.
-function getCity(user) {
-  return user?.address?.city ?? 'Unknown city';
-}""",
-    """JavaScript truth: event handlers should receive the event, prevent default only when needed, and delegate to small helpers.
-// Keep DOM access near the boundary and move logic into reusable functions.
-function handleSubmit(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const data = new FormData(form);
-  return Object.fromEntries(data.entries());
-}""",
-    """JavaScript truth: when a task says write JavaScript code to transform input into output, a good default is input validation plus a pure function.
-// Pure functions are easier to test because the same input always returns the same output.
-function transformItems(items) {
-  if (!Array.isArray(items)) {
-    return [];
-  }
-  return items
-    .filter((item) => item != null)
-    .map((item) => String(item).trim())
-    .filter((item) => item.length > 0);
-}""",
+    "JavaScript truth: prefer small functions with one clear responsibility.",
+    "JavaScript truth: use const by default and let only for reassignment.",
+    "JavaScript fragment: function solve(input) { return String(input).trim(); }",
+    "JavaScript truth: validate inputs early and fail fast with clear errors.",
+    "JavaScript fragment: if (!Array.isArray(items)) return [];",
+    "JavaScript truth: use map for one-to-one array transformation.",
+    "JavaScript fragment: const names = items.map((item) => item.name);",
+    "JavaScript truth: use filter for boolean selection.",
+    "JavaScript fragment: const active = users.filter((user) => user.isActive);",
+    "JavaScript truth: use reduce with an explicit initial value.",
+    "JavaScript fragment: const sum = numbers.reduce((total, value) => total + value, 0);",
+    "JavaScript truth: use for...of when you need break, continue, or early return.",
+    "JavaScript fragment: for (const item of items) { if (item.done) return item; }",
+    "JavaScript truth: use object spread for non-mutating updates.",
+    "JavaScript fragment: const nextUser = { ...user, ...updates };",
+    "JavaScript truth: destructure only the fields you need.",
+    "JavaScript fragment: const { id, name, email } = user;",
+    "JavaScript truth: use optional chaining and nullish coalescing for safe defaults.",
+    "JavaScript fragment: const city = user?.address?.city ?? 'Unknown city';",
+    "JavaScript truth: async fetch code should check response.ok before reading JSON.",
+    "JavaScript fragment: const response = await fetch(url);",
+    "JavaScript fragment: if (!response.ok) throw new Error(`Request failed with status ${response.status}`);",
+    "JavaScript fragment: const data = await response.json();",
+    "JavaScript truth: wrap network calls in try/catch when returning user-facing errors.",
+    "JavaScript fragment: try { return await fetchJson(url); } catch (error) { throw new Error(error.message); }",
+    "JavaScript truth: DOM handlers should keep event logic small and move data logic into helpers.",
+    "JavaScript fragment: event.preventDefault();",
+    "JavaScript fragment: const form = event.currentTarget;",
+    "JavaScript fragment: const data = Object.fromEntries(new FormData(form).entries());",
+    "JavaScript truth: for object inspection use Object.keys, Object.values, or Object.entries.",
+    "JavaScript fragment: const entries = Object.entries(record);",
+    "JavaScript truth: pure functions are easier to test than stateful functions.",
+    "JavaScript truth: when generating code, name the function after the task and keep the return shape explicit.",
 ]

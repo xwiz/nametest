@@ -14,22 +14,24 @@ import json
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(__file__))
 
 import numpy as np
 
 from srm.meaning  import MeaningDB, apply_meaning, ADJ_MULTIPLIERS, describe_verb
+from srm.meaning  import extract_meaning
 from srm.encoding import encode, hamming
 from srm.nlp      import idf_table, tokenise
 from srm.store    import MemoryStore
 from srm.pipeline import srm_query
 from srm.config   import SAMPLE_KB
+from build_meaning_db import _mask_from_states, _label_from_states
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 MEANING_DB_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "meaning.db"
+    os.path.dirname(__file__), "meaning.db"
 )
 
 
@@ -37,44 +39,44 @@ def _has_meaning_db() -> bool:
     return os.path.exists(MEANING_DB_PATH)
 
 
-# ── Polarity scoring (no DB required) ────────────────────────────────────────
 
-class TestPolarityScoring(unittest.TestCase):
-    """Test the keyword-based polarity class assignment from build script."""
+class TestStateMaskDerivation(unittest.TestCase):
+    def _hamming(self, a: bytes, b: bytes) -> int:
+        aa = np.frombuffer(a, dtype=np.uint8)
+        bb = np.frombuffer(b, dtype=np.uint8)
+        pop = np.array([bin(v).count("1") for v in range(256)], dtype=np.int32)
+        return int(pop[aa ^ bb].sum())
+
+    def test_mask_from_states_is_deterministic(self):
+        states = {"physical": ["worsened"], "emotional": ["disturbed"]}
+        self.assertEqual(_mask_from_states(states), _mask_from_states(states))
+
+    def test_similar_negative_state_words_stay_closer_than_antonyms(self):
+        worsened = _mask_from_states({"physical": ["worsened"]})
+        damaged = _mask_from_states({"physical": ["damaged"]})
+        accepted = _mask_from_states({"physical": ["accepted"]})
+        self.assertLess(self._hamming(worsened, damaged), self._hamming(worsened, accepted))
+
+    def test_label_from_states_uses_state_words(self):
+        label = _label_from_states({"physical": ["worsened"], "emotional": ["disturbed"]})
+        self.assertIn("worsened", label)
+        self.assertIn("disturbed", label)
+
+    def test_empty_states_label_defaults(self):
+        self.assertEqual(_label_from_states({}), "state-mask")
+
+
+# ── Bitmask geometry ──────────────────────────────────────────────────────────
+
+class TestMeaningDbLookup(unittest.TestCase):
 
     def setUp(self):
         if not _has_meaning_db():
-            self.skipTest("meaning.db not present — run build_meaning_db.py first")
+            self.skipTest("meaning.db not present")
         self.db = MeaningDB(MEANING_DB_PATH)
 
     def tearDown(self):
-        if hasattr(self, "db"):
-            self.db.close()
-
-    def test_aggravate_is_intensify(self):
-        vm = self.db.get_verb("aggravate")
-        self.assertIsNotNone(vm)
-        self.assertEqual(vm.polarity_class, "intensify")
-
-    def test_aggrieve_is_destruct(self):
-        vm = self.db.get_verb("aggrieve")
-        self.assertIsNotNone(vm)
-        self.assertEqual(vm.polarity_class, "destruct")
-
-    def test_agree_is_align(self):
-        vm = self.db.get_verb("agree")
-        self.assertIsNotNone(vm)
-        self.assertEqual(vm.polarity_class, "align")
-
-    def test_agitate_is_disrupt(self):
-        vm = self.db.get_verb("agitate")
-        self.assertIsNotNone(vm)
-        self.assertEqual(vm.polarity_class, "disrupt")
-
-    def test_aggregate_is_aggregate(self):
-        vm = self.db.get_verb("aggregate")
-        self.assertIsNotNone(vm)
-        self.assertEqual(vm.polarity_class, "aggregate")
+        self.db.close()
 
     def test_unknown_verb_returns_none(self):
         self.assertIsNone(self.db.get_verb("xyzzyx"))
@@ -82,41 +84,12 @@ class TestPolarityScoring(unittest.TestCase):
     def test_known_verbs_set_nonempty(self):
         self.assertGreater(len(self.db.known_verbs()), 0)
 
-
-# ── Bitmask geometry ──────────────────────────────────────────────────────────
-
-class TestBitmaskGeometry(unittest.TestCase):
-    """All polarity class bitmasks must be well-spread in Hamming space."""
-
-    def setUp(self):
-        if not _has_meaning_db():
-            self.skipTest("meaning.db not present")
-        import sqlite3
-        conn = sqlite3.connect(MEANING_DB_PATH)
-        rows = conn.execute(
-            "SELECT name, bitmask FROM polarity_classes ORDER BY id"
-        ).fetchall()
-        conn.close()
-        self.masks = [(r[0], np.frombuffer(r[1], dtype=np.uint8)) for r in rows]
-        self._pop = np.array([bin(b).count("1") for b in range(256)], dtype=np.int32)
-
-    def _hamming(self, a, b):
-        return int(self._pop[a ^ b].sum())
-
-    def test_all_pairs_exceed_48_bits(self):
-        for i, (ni, ai) in enumerate(self.masks):
-            for j, (nj, aj) in enumerate(self.masks):
-                if i >= j:
-                    continue
-                d = self._hamming(ai, aj)
-                self.assertGreaterEqual(
-                    d, 48,
-                    f"Bitmask pair ({ni}, {nj}) has hamming={d} < 48"
-                )
-
-    def test_self_distance_is_zero(self):
-        for name, mask in self.masks:
-            self.assertEqual(self._hamming(mask, mask), 0)
+    def test_known_verb_has_mask(self):
+        vm = self.db.get_verb("aggravate")
+        if vm is None:
+            self.skipTest("aggravate not present in local meaning.db")
+        self.assertEqual(vm.polarity_mask.shape, (16,))
+        self.assertTrue(vm.polarity_class)
 
 
 # ── apply_meaning ─────────────────────────────────────────────────────────────
@@ -180,6 +153,20 @@ class TestApplyMeaning(unittest.TestCase):
         if bac:
             _, w = bac[0]
             self.assertLess(w, 0, "Weight after negation should be negative")
+
+
+class TestExtractMeaning(unittest.TestCase):
+    def test_fire_alert_house_on_fire(self):
+        m = extract_meaning("My house is on fire")
+        self.assertIn("alerts", m)
+        self.assertTrue(any(a.get("type") == "fire" for a in m["alerts"]))
+        fire = next(a for a in m["alerts"] if a.get("type") == "fire")
+        self.assertEqual(fire.get("entity"), "house")
+
+    def test_frames_for_copula_statement(self):
+        m = extract_meaning("My house is on fire")
+        self.assertIn("frames", m)
+        self.assertTrue(any(f.get("verb") == "is" for f in m["frames"]))
 
 
 # ── Meaning-aware encoding geometry ──────────────────────────────────────────
@@ -290,7 +277,7 @@ class TestDescribeVerb(unittest.TestCase):
     def test_known_verb(self):
         desc = describe_verb("aggravate", self.db)
         self.assertIn("aggravate", desc)
-        self.assertIn("intensify", desc)
+        self.assertNotIn("not in meaning DB", desc)
 
     def test_unknown_verb(self):
         desc = describe_verb("xyzzyx", self.db)

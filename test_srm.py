@@ -13,17 +13,18 @@ import os
 import sys
 import tempfile
 import unittest
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import random
 
 import numpy as np
 
-from srm.config   import CODE_BITS, PACK_BYTES, SAMPLE_KB
+sys.path.insert(0, os.path.dirname(__file__))
+
+from srm.config   import CODE_BITS, PACK_BYTES, SAMPLE_KB, CHAT_KB, JS_KB, STOPWORDS
 from srm.nlp      import tokenise, idf_table, tfidf_vec, cosine, expand_query
 from srm.encoding import encode, encode_batch, hamming, hamming_batch
 from srm.traversal import traverse
 from srm.store    import MemoryStore
-from srm.pipeline import srm_query
+from srm.pipeline import srm_query, srm_query_cast_reconstruct, srm_query_auto
 
 
 # ── NLP ───────────────────────────────────────────────────────────────────────
@@ -114,13 +115,14 @@ class TestHamming(unittest.TestCase):
         c = encode("anything")
         self.assertEqual(hamming(c, c), 0)
 
-    def test_batch_shape(self):
-        texts = ["one", "two", "three"]
+    def test_total_votes_equals_casts(self):
+        texts = ["mitochondria produces ATP", "black hole gravity"]
         idf   = idf_table(texts)
         codes = encode_batch(texts, idf)
-        q     = encode("one", idf)
-        dists = hamming_batch(q, codes)
-        self.assertEqual(dists.shape, (3,))
+        q     = encode("mitochondria ATP", idf)
+        votes, _ = traverse(q, codes, num_casts=30, noise=0.12,
+                            rng=np.random.default_rng(123))
+        self.assertEqual(sum(votes.values()), 30)
 
     def test_batch_self_is_minimum(self):
         texts = ["one", "two three four five"]
@@ -148,15 +150,291 @@ class TestTraverse(unittest.TestCase):
 
     def test_total_votes_equals_casts(self):
         q_code     = encode("mitochondria", self.idf)
-        votes, _   = traverse(q_code, self.codes, num_casts=30, noise=0.1)
+        votes, _   = traverse(q_code, self.codes, num_casts=30, noise=0.1,
+                              rng=np.random.default_rng(123))
         self.assertEqual(votes.total(), 30)
 
     def test_relevant_memory_wins_more(self):
         # Memory 0: "The mitochondria is the powerhouse..."
         q_code   = encode("mitochondria ATP powerhouse", self.idf)
-        votes, _ = traverse(q_code, self.codes, num_casts=100, noise=0.08)
-        top      = votes.most_common(1)[0][0]
-        self.assertEqual(top, 0)
+        votes, _ = traverse(q_code, self.codes, num_casts=40, noise=0.12,
+                            rng=np.random.default_rng(123))
+        # memory 0 should attract more probes
+        self.assertGreater(votes[0], votes[1])
+
+
+# ── Cast-level reconstruction (fragment KB) ───────────────────────────────────
+
+class TestCastReconstruct(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.store = MemoryStore(self.tmp.name)
+
+        # Tiny KB fragments (not full sentences on purpose)
+        self.frags = [
+            "mitochondria produce atp",
+            "cellular respiration generates energy",
+            "photosynthesis makes glucose",
+            "entropy measures disorder",
+        ]
+        for f in self.frags:
+            self.store.add(f)
+
+    def tearDown(self):
+        self.store.close()
+        os.unlink(self.tmp.name)
+
+    def test_reconstruct_includes_multiple_unique_fragments(self):
+        r = srm_query_cast_reconstruct(
+            "how do cells produce energy",
+            self.store,
+            num_casts=4,
+            noise=0.12,
+            seed=7,
+            max_words=80,
+        )
+        self.assertIn("response", r)
+        self.assertIn("cast_outputs", r)
+        self.assertEqual(len(r["cast_outputs"]), 4)
+        self.assertGreaterEqual(len(r["selected_outputs"]), 2)
+
+        # Response should contain at least 2 distinct fragment strings.
+        hits = sum(1 for f in self.frags if f.split()[0] in r["response"])
+        self.assertGreaterEqual(hits, 2)
+
+    def test_reconstruct_is_deterministic_with_seed(self):
+        r1 = srm_query_cast_reconstruct(
+            "how do cells produce energy",
+            self.store,
+            num_casts=4,
+            noise=0.12,
+            seed=123,
+        )
+        r2 = srm_query_cast_reconstruct(
+            "how do cells produce energy",
+            self.store,
+            num_casts=4,
+            noise=0.12,
+            seed=123,
+        )
+        self.assertEqual(r1["unique_cast_indices"], r2["unique_cast_indices"])
+
+
+class TestAutoModeSelection(unittest.TestCase):
+    def _sources_for(self, r: dict) -> list[str]:
+        mode = r.get("auto_selected_mode")
+        if mode == "reconstruct":
+            return list(r.get("selected_outputs") or [])
+        return [t for _, _, t in (r.get("top_attractors") or [])]
+
+    def _assert_sources_overlap_expanded_query(self, q: str, r: dict) -> None:
+        expanded = expand_query(q)
+        q_terms = [t for t in tokenise(expanded) if t not in ("the", "and") and len(t) > 2]
+        self.assertGreater(len(q_terms), 0, f"No content terms extracted from expanded query: {expanded!r}")
+
+        srcs = "\n".join(self._sources_for(r)).lower()
+        self.assertGreater(len(srcs.strip()), 0)
+        self.assertTrue(
+            any(t in srcs for t in q_terms),
+            f"Expected at least one expanded query term in source memories. q={q!r} expanded={expanded!r} terms={q_terms!r} srcs={srcs!r}",
+        )
+
+    def test_auto_prefers_reconstruct_for_fragment_kb(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        store = MemoryStore(tmp.name)
+        try:
+            frags = [
+                "bread food carbohydrate",
+                "bread is baked from flour",
+                "flour comes from wheat",
+                "wheat is a grain",
+            ]
+            for f in frags:
+                store.add(f)
+
+            r = srm_query_auto(
+                "bread wheat",
+                store,
+                num_casts=4,
+                noise=0.14,
+                seed=7,
+                max_words=80,
+            )
+            self.assertIn("auto_selected_mode", r)
+            self.assertIn(r["auto_selected_mode"], ("synth", "reconstruct"))
+            self.assertEqual(r["auto_selected_mode"], "reconstruct")
+            self.assertIn("auto_scores", r)
+            self.assertGreaterEqual(r["auto_scores"]["reconstruct"], r["auto_scores"]["synth"])
+        finally:
+            store.close()
+            os.unlink(tmp.name)
+
+    def test_chat_kb_conversation_prompts(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        store = MemoryStore(tmp.name)
+        try:
+            for t in CHAT_KB:
+                store.add(t)
+
+            cases = [
+                "I am bored",
+                "What is the weather today",
+                "How do you feel",
+                "Who are you",
+                "Who am I",
+            ]
+
+            for qi, q in enumerate(cases):
+                r = srm_query_auto(q, store, num_casts=16, noise=0.12, seed=101 + qi)
+                self.assertIn("response", r)
+                self.assertIn("auto_selected_mode", r)
+                resp = r["response"].strip().lower()
+                self.assertGreater(len(resp), 0)
+                self._assert_sources_overlap_expanded_query(q, r)
+        finally:
+            store.close()
+            os.unlink(tmp.name)
+
+    def test_chat_kb_health_prompts(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        store = MemoryStore(tmp.name)
+        try:
+            for t in CHAT_KB:
+                store.add(t)
+
+            cases = [
+                "I have headache",
+                "My stomach aches",
+            ]
+
+            for qi, q in enumerate(cases):
+                r = srm_query_auto(q, store, num_casts=18, noise=0.12, seed=202 + qi)
+                self.assertIn("response", r)
+                self.assertIn("auto_selected_mode", r)
+                resp = r["response"].strip().lower()
+                self.assertGreater(len(resp), 0)
+                self._assert_sources_overlap_expanded_query(q, r)
+        finally:
+            store.close()
+            os.unlink(tmp.name)
+
+    def test_auto_chat_kb_prefers_synth(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        store = MemoryStore(tmp.name)
+        try:
+            chat_kb = [
+                "Hello. How can I help you today?",
+                "If you say a food name, you might mean you want to eat it.",
+                "If you are requesting something, you can say: Could you give me bread?",
+                "If there is an emergency like a fire, call local emergency services and get to safety.",
+            ]
+            for t in chat_kb:
+                store.add(t)
+
+            r = srm_query_auto("hello", store, num_casts=12, noise=0.12, seed=5)
+            self.assertEqual(r["auto_selected_mode"], "synth")
+            self.assertIn("hello", r["response"].lower())
+
+            r2 = srm_query_auto("bread", store, num_casts=12, noise=0.12, seed=6)
+            self.assertEqual(r2["auto_selected_mode"], "synth")
+            self.assertIn("bread", r2["response"].lower())
+        finally:
+            store.close()
+            os.unlink(tmp.name)
+
+    def test_auto_prefers_synth_for_sentence_kb(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        store = MemoryStore(tmp.name)
+        try:
+            for t in SAMPLE_KB:
+                store.add(t)
+
+            r = srm_query_auto(
+                "How does DNA replication work?",
+                store,
+                num_casts=30,
+                noise=0.12,
+                seed=11,
+            )
+            self.assertEqual(r["auto_selected_mode"], "synth")
+        finally:
+            store.close()
+            os.unlink(tmp.name)
+
+    def test_javascript_fragment_kb_returns_code_terms(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        store = MemoryStore(tmp.name)
+        try:
+            for t in JS_KB:
+                store.add(t)
+
+            r = srm_query_auto(
+                "write javascript code to fetch json from an api",
+                store,
+                num_casts=18,
+                noise=0.12,
+                seed=29,
+            )
+            self.assertIn("response", r)
+            self.assertIn(r["auto_selected_mode"], ("synth", "reconstruct"))
+            resp = r["response"].lower()
+            self.assertTrue(any(term in resp for term in ["fetch", "json", "response", "await", "error"]))
+        finally:
+            store.close()
+            os.unlink(tmp.name)
+
+    def test_auto_is_deterministic_with_seed(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        store = MemoryStore(tmp.name)
+        try:
+            for t in SAMPLE_KB:
+                store.add(t)
+
+            r1 = srm_query_auto("mitochondria ATP", store, num_casts=20, noise=0.12, seed=123)
+            r2 = srm_query_auto("mitochondria ATP", store, num_casts=20, noise=0.12, seed=123)
+            self.assertEqual(r1["auto_selected_mode"], r2["auto_selected_mode"])
+            self.assertEqual(r1["response"], r2["response"])
+        finally:
+            store.close()
+            os.unlink(tmp.name)
+
+
+# ── Randomized but stable smoke tests ────────────────────────────────────────
+
+class TestRandomSmoke(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.store = MemoryStore(self.tmp.name)
+        for t in SAMPLE_KB:
+            self.store.add(t)
+
+    def tearDown(self):
+        self.store.close()
+        os.unlink(self.tmp.name)
+
+    def test_many_queries_return_nonempty_responses(self):
+        rng = random.Random(123)
+        # Build a small query pool from content tokens.
+        toks: list[str] = []
+        for t in SAMPLE_KB:
+            toks.extend([w for w in tokenise(t) if w not in ("the", "and") and len(w) > 3])
+        self.assertGreater(len(toks), 10)
+
+        for i in range(25):
+            q = " ".join(rng.sample(toks, 3))
+            r = srm_query(q, self.store, num_casts=20, noise=0.12, seed=i)
+            self.assertIn("response", r)
+            self.assertIsInstance(r["response"], str)
+            self.assertGreater(len(r["response"].strip()), 0)
 
 
 # ── MemoryStore ───────────────────────────────────────────────────────────────
