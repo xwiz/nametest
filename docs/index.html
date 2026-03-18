@@ -254,6 +254,22 @@
               <input id="cfgAutoAvgWords" type="number" min="1" max="40" step="1">
             </div>
           </div>
+          <div class="row" style="margin-top:12px;">
+            <div>
+              <label for="cfgClusterLimit">Cluster limit</label>
+              <input id="cfgClusterLimit" type="number" min="1" max="8" step="1">
+            </div>
+            <div>
+              <label for="cfgClusterSentenceBias">Sentence cluster bias</label>
+              <input id="cfgClusterSentenceBias" type="number" min="0" max="1" step="0.01">
+            </div>
+          </div>
+          <div class="row" style="margin-top:12px;">
+            <div>
+              <label for="cfgClusterPhraseBias">Phrase cluster bias</label>
+              <input id="cfgClusterPhraseBias" type="number" min="0" max="1" step="0.01">
+            </div>
+          </div>
         </div>
       </div>
 
@@ -301,6 +317,9 @@
       overlap_floor: 3,
       overlap_ratio: 0.6,
       auto_reconstruct_avg_words_below: 11,
+      cluster_limit: 2,
+      cluster_sentence_bias: 0.18,
+      cluster_phrase_bias: 0.28,
     };
 
     function tokenise(text) {
@@ -349,6 +368,10 @@
       return out;
     }
 
+    function contentTokens(tokens) {
+      return tokens.filter(t => !STOPWORDS.has(t) && t.length > 2);
+    }
+
     function cosine(a, b) {
       let dot = 0, na = 0, nb = 0;
       for (const v of a.values()) na += v * v;
@@ -359,24 +382,34 @@
       return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
     }
 
-    function overlapScore(qTokens, docTokens) {
-      const q = new Set(qTokens.filter(t => !STOPWORDS.has(t) && t.length > 2));
-      const d = new Set(docTokens.filter(t => !STOPWORDS.has(t) && t.length > 2));
+    function overlapScore(qTokens, docTokens, useRawTokens = false) {
+      const qBase = useRawTokens ? qTokens : contentTokens(qTokens);
+      const dBase = useRawTokens ? docTokens : contentTokens(docTokens);
+      const q = new Set(qBase);
+      const d = new Set(dBase);
       let hits = 0;
       for (const t of q) if (d.has(t)) hits += 1;
       return q.size ? hits / q.size : 0;
     }
 
+    function numberOr(value, fallback) {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    }
+
     function getDemoConfig(data) {
       const raw = { ...DEFAULT_DEMO_CONFIG, ...(data.demoConfig || {}) };
       return {
-        score_floor: Number(raw.score_floor),
-        selection_limit: Number(raw.selection_limit),
-        reconstruct_limit: Number(raw.reconstruct_limit),
-        synth_limit: Number(raw.synth_limit),
-        overlap_floor: Number(raw.overlap_floor),
-        overlap_ratio: Number(raw.overlap_ratio),
-        auto_reconstruct_avg_words_below: Number(raw.auto_reconstruct_avg_words_below),
+        score_floor: numberOr(raw.score_floor, DEFAULT_DEMO_CONFIG.score_floor),
+        selection_limit: Math.max(1, Math.floor(numberOr(raw.selection_limit, DEFAULT_DEMO_CONFIG.selection_limit))),
+        reconstruct_limit: Math.max(1, Math.floor(numberOr(raw.reconstruct_limit, DEFAULT_DEMO_CONFIG.reconstruct_limit))),
+        synth_limit: Math.max(1, Math.floor(numberOr(raw.synth_limit, DEFAULT_DEMO_CONFIG.synth_limit))),
+        overlap_floor: Math.max(1, Math.floor(numberOr(raw.overlap_floor, DEFAULT_DEMO_CONFIG.overlap_floor))),
+        overlap_ratio: Math.min(1, Math.max(0, numberOr(raw.overlap_ratio, DEFAULT_DEMO_CONFIG.overlap_ratio))),
+        auto_reconstruct_avg_words_below: Math.max(1, numberOr(raw.auto_reconstruct_avg_words_below, DEFAULT_DEMO_CONFIG.auto_reconstruct_avg_words_below)),
+        cluster_limit: Math.max(1, Math.floor(numberOr(raw.cluster_limit, DEFAULT_DEMO_CONFIG.cluster_limit))),
+        cluster_sentence_bias: Math.max(0, numberOr(raw.cluster_sentence_bias, DEFAULT_DEMO_CONFIG.cluster_sentence_bias)),
+        cluster_phrase_bias: Math.max(0, numberOr(raw.cluster_phrase_bias, DEFAULT_DEMO_CONFIG.cluster_phrase_bias)),
       };
     }
 
@@ -388,35 +421,80 @@
       document.getElementById('cfgOverlapFloor').value = config.overlap_floor;
       document.getElementById('cfgOverlapRatio').value = config.overlap_ratio;
       document.getElementById('cfgAutoAvgWords').value = config.auto_reconstruct_avg_words_below;
+      document.getElementById('cfgClusterLimit').value = config.cluster_limit;
+      document.getElementById('cfgClusterSentenceBias').value = config.cluster_sentence_bias;
+      document.getElementById('cfgClusterPhraseBias').value = config.cluster_phrase_bias;
     }
 
     function readConfigFromInputs(data) {
       const config = getDemoConfig(data);
       return {
-        score_floor: Number(document.getElementById('cfgScoreFloor').value || config.score_floor),
-        selection_limit: Number(document.getElementById('cfgSelectionLimit').value || config.selection_limit),
-        reconstruct_limit: Number(document.getElementById('cfgReconstructLimit').value || config.reconstruct_limit),
-        synth_limit: Number(document.getElementById('cfgSynthLimit').value || config.synth_limit),
-        overlap_floor: Number(document.getElementById('cfgOverlapFloor').value || config.overlap_floor),
-        overlap_ratio: Number(document.getElementById('cfgOverlapRatio').value || config.overlap_ratio),
-        auto_reconstruct_avg_words_below: Number(document.getElementById('cfgAutoAvgWords').value || config.auto_reconstruct_avg_words_below),
+        score_floor: Math.min(1, Math.max(0, numberOr(document.getElementById('cfgScoreFloor').value, config.score_floor))),
+        selection_limit: Math.max(1, Math.floor(numberOr(document.getElementById('cfgSelectionLimit').value, config.selection_limit))),
+        reconstruct_limit: Math.max(1, Math.floor(numberOr(document.getElementById('cfgReconstructLimit').value, config.reconstruct_limit))),
+        synth_limit: Math.max(1, Math.floor(numberOr(document.getElementById('cfgSynthLimit').value, config.synth_limit))),
+        overlap_floor: Math.max(1, Math.floor(numberOr(document.getElementById('cfgOverlapFloor').value, config.overlap_floor))),
+        overlap_ratio: Math.min(1, Math.max(0, numberOr(document.getElementById('cfgOverlapRatio').value, config.overlap_ratio))),
+        auto_reconstruct_avg_words_below: Math.max(1, numberOr(document.getElementById('cfgAutoAvgWords').value, config.auto_reconstruct_avg_words_below)),
+        cluster_limit: Math.max(1, Math.floor(numberOr(document.getElementById('cfgClusterLimit').value, config.cluster_limit))),
+        cluster_sentence_bias: Math.max(0, numberOr(document.getElementById('cfgClusterSentenceBias').value, config.cluster_sentence_bias)),
+        cluster_phrase_bias: Math.max(0, numberOr(document.getElementById('cfgClusterPhraseBias').value, config.cluster_phrase_bias)),
       };
     }
 
-    function selectMemories(query, corpus, expansions, config) {
+    function scoreTextAgainstQuery(qTokens, text, idf, useRawTokens) {
+      const dTokens = tokenise(text);
+      const dVec = tfidfVec(useRawTokens ? dTokens : contentTokens(dTokens), idf);
+      const qVec = tfidfVec(useRawTokens ? qTokens : contentTokens(qTokens), idf);
+      const cos = cosine(qVec, dVec);
+      const overlap = overlapScore(qTokens, dTokens, useRawTokens);
+      return { cos, overlap, score: 0.7 * cos + 0.3 * overlap };
+    }
+
+    function flattenClusteredKb(clusters) {
+      return (clusters || []).flatMap(cluster => (cluster.entries || []).map(text => ({ text, cluster })));
+    }
+
+    function selectMemories(query, corpus, expansions, config, clusters = []) {
       const expanded = expandQuery(query, expansions);
-      const idf = idfTable(corpus);
-      const qVec = tfidfVec(tokenise(expanded), idf);
       const qTokens = tokenise(expanded);
-      const ranked = corpus.map((text, idx) => {
-        const dTokens = tokenise(text);
-        const dVec = tfidfVec(dTokens, idf);
-        const cos = cosine(qVec, dVec);
-        const overlap = overlapScore(qTokens, dTokens);
-        const score = 0.7 * cos + 0.3 * overlap;
-        return { idx, text, cos, overlap, score };
+      const useRawTokens = contentTokens(qTokens).length === 0;
+      const corpusEntries = clusters.length ? flattenClusteredKb(clusters) : corpus.map(text => ({ text, cluster: null }));
+      const idf = idfTable(corpusEntries.map(item => item.text));
+      const topClusters = clusters.length
+        ? clusters
+            .map((cluster, idx) => {
+              const clusterText = `${cluster.label} ${cluster.summary} ${(cluster.entries || []).join(' ')}`;
+              const metrics = scoreTextAgainstQuery(qTokens, clusterText, idf, useRawTokens);
+              return { ...cluster, idx, clusterScore: metrics.score };
+            })
+            .sort((a, b) => b.clusterScore - a.clusterScore)
+            .slice(0, config.cluster_limit)
+        : [];
+      const topClusterLabels = new Set(topClusters.map(cluster => cluster.label));
+      const ranked = corpusEntries.map((item, idx) => {
+        const metrics = scoreTextAgainstQuery(qTokens, item.text, idf, useRawTokens);
+        const bias = item.cluster && topClusterLabels.has(item.cluster.label)
+          ? item.cluster.kind === 'phrase'
+            ? config.cluster_phrase_bias
+            : config.cluster_sentence_bias
+          : 0;
+        return {
+          idx,
+          text: item.text,
+          cos: metrics.cos,
+          overlap: metrics.overlap,
+          score: metrics.score + bias,
+          cluster: item.cluster ? item.cluster.label : null,
+          clusterKind: item.cluster ? item.cluster.kind : null,
+        };
       }).sort((a, b) => b.score - a.score);
       return { expanded, picked: ranked.filter(x => x.score > config.score_floor).slice(0, config.selection_limit) };
+    }
+
+    function reconstruct(picked, config) {
+      if (!picked.length) return 'No relevant memories found in the selected demo KB.';
+      return picked.map(x => x.text.trim()).slice(0, config.reconstruct_limit).join(' ');
     }
 
     function synthesise(query, picked, config) {
@@ -437,11 +515,6 @@
       }
       if (chosen.length === 1) return chosen[0];
       return chosen.map((line, i) => i === 0 ? line : `${CONNECTIVES[(i - 1) % CONNECTIVES.length]}${line.charAt(0).toLowerCase()}${line.slice(1)}`).join(' ');
-    }
-
-    function reconstruct(picked, config) {
-      if (!picked.length) return 'No relevant memories found in the selected demo KB.';
-      return picked.map(x => x.text.trim()).slice(0, config.reconstruct_limit).join(' ');
     }
 
     function chooseMode(picked, forcedMode, config) {
@@ -516,7 +589,15 @@
         : dataset === 'sample'
         ? data.sampleKb
         : data.chatKb.concat(data.jsKb, data.sampleKb);
-      const { expanded, picked } = selectMemories(query, corpus, data.expansions, config);
+      const clusteredKb = data.clusteredKb || {};
+      const clusters = dataset === 'chat'
+        ? (clusteredKb.chat || [])
+        : dataset === 'js'
+        ? (clusteredKb.js || [])
+        : dataset === 'sample'
+        ? (clusteredKb.sample || [])
+        : [...(clusteredKb.chat || []), ...(clusteredKb.js || []), ...(clusteredKb.sample || [])];
+      const { expanded, picked } = selectMemories(query, corpus, data.expansions, config, clusters);
       const mode = chooseMode(picked, forcedMode, config);
       const response = mode === 'reconstruct' ? reconstruct(picked, config) : synthesise(query, picked, config);
       render({ version: data.version, expanded, picked, response, mode, config });

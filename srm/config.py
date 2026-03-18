@@ -65,6 +65,9 @@ CONN_CONCLUDE: list[str] = ["Therefore, ",   "In summary, ",   "Altogether, "]
 # specific terminology encoded in memories — without any embeddings.
 EXPANSIONS: dict[str, list[str]] = {
     # Conversation / chat
+    "hi":          ["hello", "greeting", "help"],
+    "hey":         ["hello", "greeting", "help"],
+    "hello":       ["hi", "greeting", "help"],
     "who":         ["identity", "assistant", "system"],
     "bored":       ["activity", "plan", "talk"],
     "feel":        ["state", "mood"],
@@ -157,7 +160,9 @@ SAMPLE_KB: list[str] = [
 # ── Chat seed KB (lightweight conversational scaffolding) ─────────────────────
 CHAT_KB: list[str] = [
     "Hello. How can I help you today?",
-    "If you ask a short question, I may ask a clarifying question to be sure I understand.",
+    "Hi. How can I help you today?",
+    "If you ask how I am, I can say I am functioning normally and ask how you are doing.",
+    "For a very short question, I may ask a clarifying question so I can answer more precisely.",
     "If your request is ambiguous, I can ask one focused clarifying question.",
     "A good problem report says what happened, what you expected, and what changed.",
     "If you say a single word like a food name, you might be expressing a need or request.",
@@ -172,10 +177,10 @@ CHAT_KB: list[str] = [
     "A quick task can be something you finish in under ten minutes.",
     "A relaxing task can be rest, music, breathing, or a short walk.",
     "A learning task can be reading one page, practicing one concept, or asking one question.",
-    "If you ask: How do you feel, I can describe my current state as a program and ask how you feel.",
+    "If you ask how I feel, I can describe my current state as a program and ask how you feel.",
     "If you ask how I work, I can explain that I retrieve memories and assemble a response from them.",
-    "If you ask: Who are you, I can explain that I am a text-based system that uses stored memories to respond.",
-    "If you ask: Who am I, I cannot know personal details unless you tell me, but I can ask what you want to be called.",
+    "If you ask who I am, I can explain that I am a text-based system that uses stored memories to respond.",
+    "If you ask who you are, I cannot know personal details unless you tell me, but I can ask what you want to be called.",
     "If I do not know something personal about you, I can ask you to provide the missing detail.",
     "If you ask about the weather today, I may not know your location, so I can ask where you are.",
     "If you want the current weather, you can check a local forecast source and tell me what you see.",
