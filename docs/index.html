@@ -439,13 +439,13 @@
         if (POLARITY_YES.has(t)) yes += 0.35;
         if (POLARITY_NO.has(t)) no += 0.35;
       }
-      if (yes === no) return rng() >= 0.5 ? 'yes' : 'no';
-      if (!yes && !no) return rng() >= 0.5 ? 'yes' : 'no';
-      if (yes > no * 1.15) return 'yes';
-      if (no > yes * 1.15) return 'no';
+      if (yes === no) return { vote: rng() >= 0.5 ? 'yes' : 'no', fallback: true };
+      if (!yes && !no) return { vote: rng() >= 0.5 ? 'yes' : 'no', fallback: true };
+      if (yes > no * 1.15) return { vote: 'yes', fallback: false };
+      if (no > yes * 1.15) return { vote: 'no', fallback: false };
       const total = yes + no;
-      if (!total) return rng() >= 0.5 ? 'yes' : 'no';
-      return rng() < (yes / total) ? 'yes' : 'no';
+      if (!total) return { vote: rng() >= 0.5 ? 'yes' : 'no', fallback: true };
+      return { vote: rng() < (yes / total) ? 'yes' : 'no', fallback: true };
     }
 
     function tokenise(text) {

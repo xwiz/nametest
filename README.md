@@ -1,10 +1,10 @@
 # SRM — Stochastic Resonance Memory
 
-A small CPU-friendly memory-and-response system built with **Python + SQLite + NumPy**.
+A tiny < 100KB memory-and-response system built with **Python + SQLite + NumPy**.
 
 The goal of this MVP is simple:
 
-- **show that a specialized LLM-style system can run locally on CPU**
+- **show that a specialized LLM-style system doesnt require a billion dataset or even explicit training**
 - **handle only narrow tasks by searching explicit memories**
 - **use stochastic search plus meaning inference to separate relevant memories**
 - **reconstruct responses from fragments instead of free-form token generation**
