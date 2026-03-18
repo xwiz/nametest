@@ -33,7 +33,46 @@
     h1, h2, h3, p { margin-top: 0; }
     .hero {
       text-align: center;
-      margin-bottom: 32px;
+      margin-bottom: 24px;
+    }
+    .hero .card {
+      padding: 16px;
+    }
+    .hero .title {
+      font-size: clamp(1.4rem, 2.5vw, 2.2rem);
+      margin-bottom: 6px;
+    }
+    .hero .subtitle {
+      font-size: 0.9rem;
+      margin-bottom: 12px;
+      opacity: 0.8;
+    }
+    .hero .prompt-list {
+      margin-top: 8px;
+      height: 20px;
+      overflow: hidden;
+    }
+    .hero .prompt-chip {
+      font-size: 0.75rem;
+      padding: 4px 8px;
+      max-width: 120px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      opacity: 0;
+      animation: fadeInOut 3s ease-in-out;
+      position: absolute;
+    }
+    .prompt-container {
+      position: relative;
+      height: 20px;
+      display: inline-block;
+    }
+    @keyframes fadeInOut {
+      0% { opacity: 0; transform: translateY(10px); }
+      20% { opacity: 1; transform: translateY(0); }
+      80% { opacity: 1; transform: translateY(0); }
+      100% { opacity: 0; transform: translateY(-10px); }
     }
     .card {
       background: rgba(19,26,47,0.92);
@@ -171,6 +210,31 @@
       border-radius: 14px;
       padding: 14px;
       min-height: 140px;
+      position: relative;
+      overflow: hidden;
+    }
+    .response.generating::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: linear-gradient(90deg, transparent, rgba(103,232,249,0.1), transparent);
+      animation: shimmer 1.5s infinite;
+      pointer-events: none;
+    }
+    @keyframes shimmer {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+    }
+    .char {
+      opacity: 0;
+      animation: typeChar 0.05s ease-out forwards;
+    }
+    @keyframes typeChar {
+      0% { opacity: 0; transform: translateY(2px); }
+      100% { opacity: 1; transform: translateY(0); }
     }
     .meta {
       color: var(--muted);
@@ -227,14 +291,13 @@
         <p class="subtitle">
           CPU-friendly specialized system using stochastic search and explicit memories
         </p>
-        <div id="heroPromptList" class="prompt-list"></div>
       </div>
     </section>
 
     <section class="panels">
       <div class="card">
         <h3>Query</h3>
-        <label for="query">Ask anything</label>
+        <label for="query">Ask anything <span class="prompt-container" id="rotatingPrompts"></span></label>
         <textarea id="query" placeholder="Try: Who are you, I am bored, or write javascript code to fetch json"></textarea>
         
         <div class="row" style="margin-top:12px;">
@@ -257,10 +320,7 @@
           </div>
         </div>
 
-        <div class="row" style="margin-top:12px;">
-          <button id="runBtn">Run demo</button>
-          <button id="clearBtn" class="secondary">Clear</button>
-        </div>
+        <button id="runBtn" style="width: 100%;">Run demo</button>
 
         <div class="collapsible" id="configCollapsible">
           <div class="collapsible-header">
@@ -518,8 +578,48 @@
       return avgWords < config.auto_reconstruct_avg_words_below ? 'reconstruct' : 'synth';
     }
 
+    function animateText(text, element) {
+      element.innerHTML = '';
+      element.classList.add('generating');
+      
+      // Split into words and characters for fast animation
+      const words = text.split(' ');
+      let charIndex = 0;
+      
+      function addNextWord() {
+        if (charIndex >= words.length) {
+          element.classList.remove('generating');
+          return;
+        }
+        
+        const word = words[charIndex];
+        const wordSpan = document.createElement('span');
+        wordSpan.style.display = 'inline-block';
+        wordSpan.style.marginRight = '0.3em';
+        
+        // Add each character with fast animation
+        for (let i = 0; i < word.length; i++) {
+          const charSpan = document.createElement('span');
+          charSpan.className = 'char';
+          charSpan.textContent = word[i];
+          charSpan.style.animationDelay = `${(charIndex * 50 + i * 5)}ms`;
+          wordSpan.appendChild(charSpan);
+        }
+        
+        element.appendChild(wordSpan);
+        charIndex++;
+        
+        // Fast word-by-word reveal
+        setTimeout(addNextWord, 30);
+      }
+      
+      addNextWord();
+    }
+
     function render(result) {
-      document.getElementById('response').textContent = result.response;
+      const responseEl = document.getElementById('response');
+      animateText(result.response, responseEl);
+      
       document.getElementById('meta').innerHTML = `
         <div><span class="status">Loaded</span> version ${result.version}</div>
         <div>Expanded query: <code>${result.expanded}</code></div>
@@ -554,34 +654,44 @@
         configCollapsible.classList.toggle('open');
       });
       
-      // Setup hero prompts
-      const heroPromptList = document.getElementById('heroPromptList');
-      for (const prompt of data.prompts) {
-        const btn = document.createElement('button');
-        btn.className = 'prompt-chip';
-        btn.textContent = prompt;
-        btn.onclick = () => {
-          document.getElementById('query').value = prompt;
-          run(data);
-        };
-        heroPromptList.appendChild(btn);
+      // Setup rotating prompts
+      const rotatingPrompts = document.getElementById('rotatingPrompts');
+      const prompts = data.prompts;
+      let currentIndex = 0;
+      
+      function showNextPrompts() {
+        rotatingPrompts.innerHTML = '';
+        
+        // Show two prompts at a time
+        for (let i = 0; i < 2 && currentIndex < prompts.length; i++) {
+          const prompt = prompts[currentIndex + i];
+          const chip = document.createElement('span');
+          chip.className = 'prompt-chip';
+          chip.textContent = prompt;
+          chip.style.animationDelay = `${i * 0.2}s`;
+          chip.style.cursor = 'pointer';
+          chip.onclick = () => {
+            document.getElementById('query').value = prompt;
+            run(data);
+          };
+          rotatingPrompts.appendChild(chip);
+        }
+        
+        currentIndex = (currentIndex + 2) % prompts.length;
       }
+      
+      // Start rotation and repeat every 3 seconds
+      showNextPrompts();
+      setInterval(showNextPrompts, 3000);
 
       document.getElementById('response').textContent = 'Ready. Pick a prompt or type your own query.';
       document.getElementById('meta').innerHTML = `<div class="status">Demo data loaded</div><div>Version ${data.version}</div>`;
 
       document.getElementById('runBtn').onclick = () => run(data);
-      document.getElementById('clearBtn').onclick = () => {
-        document.getElementById('query').value = '';
-        document.getElementById('response').textContent = 'Cleared.';
-        document.getElementById('meta').textContent = '';
-        document.getElementById('detailsSection').style.display = 'none';
-        document.getElementById('memories').innerHTML = '';
-      };
       
-      // Add Ctrl+Enter functionality
+      // Add Enter functionality (Shift+Enter for newline)
       document.getElementById('query').addEventListener('keydown', (e) => {
-        if (e.ctrlKey && e.key === 'Enter') {
+        if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
           run(data);
         }
