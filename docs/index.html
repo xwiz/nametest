@@ -62,7 +62,8 @@
       text-overflow: ellipsis;
       opacity: 0;
       animation: fadeInOut 3s ease-in-out;
-      position: absolute;
+      position: relative;
+      display: inline-block;
     }
     .prompt-container {
       position: relative;
@@ -298,7 +299,7 @@
     <section class="panels">
       <div class="card">
         <h3>Query</h3>
-        <label for="query">Ask anything <span class="prompt-container" id="rotatingPrompts"></span></label>
+        <label style="margin-bottom: 10px;" for="query">Ask anything <span class="prompt-container" id="rotatingPrompts"></span></label>
         <textarea id="query" placeholder="Try: Who are you, I am bored, or write javascript code to fetch json"></textarea>
         
         <div class="row" style="margin-top:12px;">
@@ -321,8 +322,7 @@
           </div>
         </div>
 
-        <div style="margin-bottom: 20px;"></div>
-        <button id="runBtn" style="width: 100%;">Run demo</button>
+        <button id="runBtn" style="width: 100%; margin-top: 10px;">Run demo</button>
 
         <div class="collapsible" id="configCollapsible">
           <div class="collapsible-header">
@@ -662,7 +662,10 @@
       let currentIndex = 0;
       
       function showNextPrompts() {
-        rotatingPrompts.innerHTML = '';
+        // Clear all existing prompts completely
+        while (rotatingPrompts.firstChild) {
+          rotatingPrompts.removeChild(rotatingPrompts.firstChild);
+        }
         
         // Show one prompt at a time
         const prompt = prompts[currentIndex];
