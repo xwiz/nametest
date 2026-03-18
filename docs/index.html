@@ -371,6 +371,13 @@
         <h3>Response</h3>
         <div id="response" class="response">Loading demo data…</div>
         <div id="meta" class="meta"></div>
+        <div id="castToggleRow" class="small" style="margin-top:6px; display:none;">
+          <label style="cursor:pointer; display:inline-flex; align-items:center; gap:6px;">
+            <input id="toggleCastDetails" type="checkbox" style="margin:0;">
+            <span>Show yes/no casting details</span>
+          </label>
+        </div>
+        <div id="castDetails" class="small" style="margin-top:4px; display:none;"></div>
         
         <div id="detailsSection" class="details-section" style="display: none;">
           <h4 style="margin:0 0 10px; font-size: 0.95rem;">Selected memories</h4>
@@ -385,6 +392,24 @@
       'the','a','an','is','are','was','were','in','of','to','and','or','it','its','this','that','these','those','be','been','by','for','with','on','at','from','as','into','through','during','before','after','above','below','between','each','few','more','most','other','some','such','no','nor','not','only','own','same','so','than','too','very','can','will','just','should','now','have','has','had','do','does','did','would','could','may','might','also','which','who','how','what','when','where','why','about','used','using','their','they','them','we','us','you','he','she','his','her','all','any'
     ]);
     const CONNECTIVES = ['Additionally, ', 'Furthermore, ', 'In summary, '];
+    const CAST_WEIGHTS = [
+      1,  // 1 positive
+      0,  // 2 neutral
+      1,  // 3 positive
+     -1,  // 4 negative
+      1,  // 5 positive
+      1,  // 6 positive
+      1,  // 7 positive
+      1,  // 8 positive
+     -1,  // 9 negative
+      1,  // 10 positive
+      1,  // 11 positive
+      0,  // 12 neutral
+     -1,  // 13 negative
+      1,  // 14 positive
+      1,  // 15 positive
+      0,  // 16 neutral
+    ];
     const DEFAULT_DEMO_CONFIG = {
       score_floor: 0.01,
       selection_limit: 4,
@@ -700,16 +725,38 @@
         }
         const yesCount = votes.filter(v => v === 'yes').length;
         const noCount = votes.length - yesCount;
+
+        // Weighted score using CAST_WEIGHTS and per-cast votes
+        let weightedYes = 0;
+        let weightedNo = 0;
+        let totalAbs = 0;
+        for (let i = 0; i < votes.length; i++) {
+          const w = CAST_WEIGHTS[i] ?? 0;
+          if (!w) continue;
+          totalAbs += Math.abs(w);
+          if (votes[i] === 'yes') weightedYes += w;
+          else weightedNo += w;
+        }
+        const score = totalAbs ? (weightedYes - weightedNo) / totalAbs : 0;
+
+        // Map score to 5-level scale
         let answer;
-        if (yesCount === noCount) answer = 'Unclear';
-        else answer = yesCount > noCount ? 'Yes' : 'No';
-        const dominant = Math.max(yesCount, noCount);
-        const confidence = answer === 'Unclear'
-          ? `${yesCount}/${votes.length} vs ${noCount}/${votes.length} split`
-          : `${dominant}/${votes.length} casts`;
+        if (score <= -0.6) {
+          answer = 'No';
+        } else if (score <= -0.2) {
+          answer = 'Probably not';
+        } else if (score < 0.2) {
+          answer = 'Unclear';
+        } else if (score < 0.6) {
+          answer = 'Most likely';
+        } else {
+          answer = 'Yes';
+        }
+
+        const confidence = `score ${score.toFixed(2)} · ${yesCount}/${votes.length} yes vs ${noCount}/${votes.length} no`;
         const seen = new Set();
         const uniquePicked = allPicked.filter(p => !seen.has(p.text) && seen.add(p.text)).slice(0, config.selection_limit);
-        return { answer, confidence, votes, uniquePicked, fallbackSeen, casts: votes.length };
+        return { answer, confidence, votes, uniquePicked, fallbackSeen, casts: votes.length, score };
       }
 
       const initial = performCasts(4);
@@ -726,8 +773,31 @@
       document.getElementById('meta').innerHTML = `
         <div><span class="status">Loaded</span> version ${version}</div>
         <div>Mode: <strong>yes/no · ${result.casts} casts</strong></div>
-        <div>Votes: ${result.votes.map(v => `<strong style="color:${COLOR[v] || '#fbbf24'}">${v}</strong>`).join(' &middot; ')}</div>
       `;
+
+      // Casting details are hidden behind a toggle
+      const toggleRow = document.getElementById('castToggleRow');
+      const toggle = document.getElementById('toggleCastDetails');
+      const details = document.getElementById('castDetails');
+      if (toggleRow && toggle && details) {
+        toggleRow.style.display = 'block';
+        toggle.checked = false;
+        details.style.display = 'none';
+        details.innerHTML = '';
+
+        const renderDetails = () => {
+          if (!toggle.checked) {
+            details.style.display = 'none';
+            details.innerHTML = '';
+            return;
+          }
+          details.style.display = 'block';
+          details.innerHTML = `Votes (${result.casts} casts): ` +
+            result.votes.map(v => `<strong style="color:${COLOR[v] || '#fbbf24'}">${v}</strong>`).join(' &middot; ');
+        };
+
+        toggle.onchange = renderDetails;
+      }
       const detailsSection = document.getElementById('detailsSection');
       const list = document.getElementById('memories');
       if (result.uniquePicked.length) {
@@ -796,6 +866,15 @@
         <div>Expanded query: <code>${result.expanded}</code></div>
         <div>Mode: <strong>${result.mode}</strong></div>
       `;
+
+      // Hide casting UI when not in yes/no mode
+      const toggleRow = document.getElementById('castToggleRow');
+      const details = document.getElementById('castDetails');
+      if (toggleRow && details) {
+        toggleRow.style.display = 'none';
+        details.style.display = 'none';
+        details.innerHTML = '';
+      }
       
       const detailsSection = document.getElementById('detailsSection');
       const list = document.getElementById('memories');
