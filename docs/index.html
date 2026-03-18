@@ -51,6 +51,7 @@
       margin-top: 8px;
       height: 20px;
       overflow: hidden;
+      margin-bottom: 16px;
     }
     .hero .prompt-chip {
       font-size: 0.75rem;
@@ -320,6 +321,7 @@
           </div>
         </div>
 
+        <div style="margin-bottom: 20px;"></div>
         <button id="runBtn" style="width: 100%;">Run demo</button>
 
         <div class="collapsible" id="configCollapsible">
@@ -662,22 +664,19 @@
       function showNextPrompts() {
         rotatingPrompts.innerHTML = '';
         
-        // Show two prompts at a time
-        for (let i = 0; i < 2 && currentIndex < prompts.length; i++) {
-          const prompt = prompts[currentIndex + i];
-          const chip = document.createElement('span');
-          chip.className = 'prompt-chip';
-          chip.textContent = prompt;
-          chip.style.animationDelay = `${i * 0.2}s`;
-          chip.style.cursor = 'pointer';
-          chip.onclick = () => {
-            document.getElementById('query').value = prompt;
-            run(data);
-          };
-          rotatingPrompts.appendChild(chip);
-        }
+        // Show one prompt at a time
+        const prompt = prompts[currentIndex];
+        const chip = document.createElement('span');
+        chip.className = 'prompt-chip';
+        chip.textContent = prompt;
+        chip.style.cursor = 'pointer';
+        chip.onclick = () => {
+          document.getElementById('query').value = prompt;
+          run(data);
+        };
+        rotatingPrompts.appendChild(chip);
         
-        currentIndex = (currentIndex + 2) % prompts.length;
+        currentIndex = (currentIndex + 1) % prompts.length;
       }
       
       // Start rotation and repeat every 3 seconds
