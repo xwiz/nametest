@@ -26,17 +26,14 @@
       color: var(--text);
     }
     .wrap {
-      max-width: 1100px;
+      max-width: 1200px;
       margin: 0 auto;
-      padding: 32px 20px 56px;
+      padding: 24px 20px 40px;
     }
     h1, h2, h3, p { margin-top: 0; }
     .hero {
-      display: grid;
-      gap: 18px;
-      grid-template-columns: 1.2fr 1fr;
-      align-items: start;
-      margin-bottom: 24px;
+      text-align: center;
+      margin-bottom: 32px;
     }
     .card {
       background: rgba(19,26,47,0.92);
@@ -69,15 +66,25 @@
       color: var(--accent);
       font-size: 0.9rem;
     }
-    .grid {
+    .panels {
       display: grid;
-      gap: 18px;
-      grid-template-columns: 1.1fr 0.9fr;
+      gap: 20px;
+      grid-template-columns: 1fr 1fr;
+      min-height: 500px;
     }
     label {
       display: block;
       margin-bottom: 8px;
       font-weight: 600;
+    }
+    input[type="number"] {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--panel-2);
+      color: var(--text);
+      padding: 12px 14px;
+      font: inherit;
     }
     textarea, select {
       width: 100%;
@@ -88,8 +95,44 @@
       padding: 12px 14px;
       font: inherit;
     }
-    textarea { min-height: 110px; resize: vertical; }
+    textarea { min-height: 120px; resize: vertical; }
     .row { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
+    .collapsible {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-top: 12px;
+      overflow: hidden;
+    }
+    .collapsible-header {
+      padding: 12px 16px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      user-select: none;
+      transition: background 0.2s;
+    }
+    .collapsible-header:hover {
+      background: rgba(255,255,255,0.05);
+    }
+    .collapsible-content {
+      padding: 0 16px;
+      max-height: 0;
+      overflow: hidden;
+      transition: all 0.3s ease-out;
+    }
+    .collapsible.open .collapsible-content {
+      padding: 0 16px 16px;
+      max-height: 800px;
+    }
+    .chevron {
+      transition: transform 0.3s;
+      font-size: 0.8em;
+    }
+    .collapsible.open .chevron {
+      transform: rotate(180deg);
+    }
     button {
       cursor: pointer;
       border: 0;
@@ -155,8 +198,24 @@
       font-weight: 600;
     }
     .warn { color: var(--warn); }
-    @media (max-width: 860px) {
-      .hero, .grid, .row { grid-template-columns: 1fr; }
+    @media (max-width: 960px) {
+      .panels { grid-template-columns: 1fr; }
+    }
+    .details-section {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+    .memories-list {
+      margin: 12px 0;
+      padding-left: 20px;
+      display: grid;
+      gap: 8px;
+    }
+    .memories-list li {
+      line-height: 1.5;
+      color: var(--text);
+      font-size: 0.9rem;
     }
   </style>
 </head>
@@ -166,31 +225,18 @@
       <div class="card">
         <h1 class="title">SRM browser demo</h1>
         <p class="subtitle">
-          An MVP showing that a specialized LLM-style system can run on CPU for narrow tasks by using
-          stochastic search, meaning-aware retrieval, and response reconstruction over explicit memories.
+          CPU-friendly specialized system using stochastic search and explicit memories
         </p>
-        <div class="badges">
-          <span class="badge">CPU-friendly MVP</span>
-          <span class="badge">Specialized tasks</span>
-          <span class="badge">Explicit KBs</span>
-          <span class="badge">Stochastic search + reconstruction</span>
-        </div>
-      </div>
-      <div class="card">
-        <h3>What to try</h3>
-        <div id="promptList" class="prompt-list"></div>
-        <p class="small" style="margin-top:14px;">
-          For the full Python system, use <code>python main.py --seed-chat --seed-js --mode auto</code> or
-          attach <code>meaning.db</code> with <code>--meaning-db meaning.db</code>.
-        </p>
+        <div id="heroPromptList" class="prompt-list"></div>
       </div>
     </section>
 
-    <section class="grid">
+    <section class="panels">
       <div class="card">
-        <label for="query">Query</label>
-        <textarea id="query" placeholder="Ask something like: Who are you, I am bored, or write javascript code to fetch json"></textarea>
-
+        <h3>Query</h3>
+        <label for="query">Ask anything</label>
+        <textarea id="query" placeholder="Try: Who are you, I am bored, or write javascript code to fetch json"></textarea>
+        
         <div class="row" style="margin-top:12px;">
           <div>
             <label for="dataset">Demo memory set</label>
@@ -216,58 +262,31 @@
           <button id="clearBtn" class="secondary">Clear</button>
         </div>
 
-        <div style="margin-top:16px;">
-          <h3 style="margin:0 0 10px;">Tunable demo config</h3>
-          <div class="row">
-            <div>
-              <label for="cfgScoreFloor">Score floor</label>
-              <input id="cfgScoreFloor" type="number" min="0" max="1" step="0.01">
-            </div>
-            <div>
-              <label for="cfgSelectionLimit">Selection limit</label>
-              <input id="cfgSelectionLimit" type="number" min="1" max="12" step="1">
-            </div>
+        <div class="collapsible" id="configCollapsible">
+          <div class="collapsible-header">
+            <span>⚙️ Advanced configuration</span>
+            <span class="chevron">▼</span>
           </div>
-          <div class="row" style="margin-top:12px;">
-            <div>
-              <label for="cfgReconstructLimit">Reconstruct limit</label>
-              <input id="cfgReconstructLimit" type="number" min="1" max="12" step="1">
+          <div class="collapsible-content">
+            <div class="row">
+              <div>
+                <label for="cfgScoreFloor">Score floor</label>
+                <input id="cfgScoreFloor" type="number" min="0" max="1" step="0.01">
+              </div>
+              <div>
+                <label for="cfgSelectionLimit">Selection limit</label>
+                <input id="cfgSelectionLimit" type="number" min="1" max="12" step="1">
+              </div>
             </div>
-            <div>
-              <label for="cfgSynthLimit">Synth limit</label>
-              <input id="cfgSynthLimit" type="number" min="1" max="12" step="1">
-            </div>
-          </div>
-          <div class="row" style="margin-top:12px;">
-            <div>
-              <label for="cfgOverlapFloor">Overlap floor</label>
-              <input id="cfgOverlapFloor" type="number" min="1" max="12" step="1">
-            </div>
-            <div>
-              <label for="cfgOverlapRatio">Overlap ratio</label>
-              <input id="cfgOverlapRatio" type="number" min="0" max="1" step="0.05">
-            </div>
-          </div>
-          <div class="row" style="margin-top:12px;">
-            <div>
-              <label for="cfgAutoAvgWords">Auto reconstruct below avg words</label>
-              <input id="cfgAutoAvgWords" type="number" min="1" max="40" step="1">
-            </div>
-          </div>
-          <div class="row" style="margin-top:12px;">
-            <div>
-              <label for="cfgClusterLimit">Cluster limit</label>
-              <input id="cfgClusterLimit" type="number" min="1" max="8" step="1">
-            </div>
-            <div>
-              <label for="cfgClusterSentenceBias">Sentence cluster bias</label>
-              <input id="cfgClusterSentenceBias" type="number" min="0" max="1" step="0.01">
-            </div>
-          </div>
-          <div class="row" style="margin-top:12px;">
-            <div>
-              <label for="cfgClusterPhraseBias">Phrase cluster bias</label>
-              <input id="cfgClusterPhraseBias" type="number" min="0" max="1" step="0.01">
+            <div class="row" style="margin-top:12px;">
+              <div>
+                <label for="cfgReconstructLimit">Reconstruct limit</label>
+                <input id="cfgReconstructLimit" type="number" min="1" max="12" step="1">
+              </div>
+              <div>
+                <label for="cfgSynthLimit">Synth limit</label>
+                <input id="cfgSynthLimit" type="number" min="1" max="12" step="1">
+              </div>
             </div>
           </div>
         </div>
@@ -277,29 +296,11 @@
         <h3>Response</h3>
         <div id="response" class="response">Loading demo data…</div>
         <div id="meta" class="meta"></div>
-      </div>
-    </section>
-
-    <section class="grid" style="margin-top:18px;">
-      <div class="card">
-        <h3>Selected memories</h3>
-        <ol id="memories" class="memories"></ol>
-      </div>
-      <div class="card">
-        <h3>Notes</h3>
-        <p class="small">
-          This page uses the same built-in KB content and expansions exported from the repo, but it is a
-          browser-safe approximation of the Python MVP rather than the full stochastic cast engine.
-        </p>
-        <p class="small">
-          Best repo entry points:
-        </p>
-        <ul class="small">
-          <li><code>python main.py --seed --mode auto</code></li>
-          <li><code>python main.py --seed-chat --mode auto --auto-learn</code></li>
-          <li><code>python main.py --seed-js --mode auto</code></li>
-          <li><code>python build_meaning_db.py --src data/verbs --db meaning.db --fresh --report</code></li>
-        </ul>
+        
+        <div id="detailsSection" class="details-section" style="display: none;">
+          <h4 style="margin:0 0 10px; font-size: 0.95rem;">Selected memories</h4>
+          <ol id="memories" class="memories-list"></ol>
+        </div>
       </div>
     </section>
   </div>
@@ -418,12 +419,6 @@
       document.getElementById('cfgSelectionLimit').value = config.selection_limit;
       document.getElementById('cfgReconstructLimit').value = config.reconstruct_limit;
       document.getElementById('cfgSynthLimit').value = config.synth_limit;
-      document.getElementById('cfgOverlapFloor').value = config.overlap_floor;
-      document.getElementById('cfgOverlapRatio').value = config.overlap_ratio;
-      document.getElementById('cfgAutoAvgWords').value = config.auto_reconstruct_avg_words_below;
-      document.getElementById('cfgClusterLimit').value = config.cluster_limit;
-      document.getElementById('cfgClusterSentenceBias').value = config.cluster_sentence_bias;
-      document.getElementById('cfgClusterPhraseBias').value = config.cluster_phrase_bias;
     }
 
     function readConfigFromInputs(data) {
@@ -433,12 +428,12 @@
         selection_limit: Math.max(1, Math.floor(numberOr(document.getElementById('cfgSelectionLimit').value, config.selection_limit))),
         reconstruct_limit: Math.max(1, Math.floor(numberOr(document.getElementById('cfgReconstructLimit').value, config.reconstruct_limit))),
         synth_limit: Math.max(1, Math.floor(numberOr(document.getElementById('cfgSynthLimit').value, config.synth_limit))),
-        overlap_floor: Math.max(1, Math.floor(numberOr(document.getElementById('cfgOverlapFloor').value, config.overlap_floor))),
-        overlap_ratio: Math.min(1, Math.max(0, numberOr(document.getElementById('cfgOverlapRatio').value, config.overlap_ratio))),
-        auto_reconstruct_avg_words_below: Math.max(1, numberOr(document.getElementById('cfgAutoAvgWords').value, config.auto_reconstruct_avg_words_below)),
-        cluster_limit: Math.max(1, Math.floor(numberOr(document.getElementById('cfgClusterLimit').value, config.cluster_limit))),
-        cluster_sentence_bias: Math.max(0, numberOr(document.getElementById('cfgClusterSentenceBias').value, config.cluster_sentence_bias)),
-        cluster_phrase_bias: Math.max(0, numberOr(document.getElementById('cfgClusterPhraseBias').value, config.cluster_phrase_bias)),
+        overlap_floor: config.overlap_floor,
+        overlap_ratio: config.overlap_ratio,
+        auto_reconstruct_avg_words_below: config.auto_reconstruct_avg_words_below,
+        cluster_limit: config.cluster_limit,
+        cluster_sentence_bias: config.cluster_sentence_bias,
+        cluster_phrase_bias: config.cluster_phrase_bias,
       };
     }
 
@@ -530,18 +525,20 @@
         <div>Expanded query: <code>${result.expanded}</code></div>
         <div>Mode: <strong>${result.mode}</strong></div>
       `;
+      
+      const detailsSection = document.getElementById('detailsSection');
       const list = document.getElementById('memories');
-      list.innerHTML = '';
-      for (const item of result.picked) {
-        const li = document.createElement('li');
-        li.innerHTML = `${item.text} <div class="small">score=${item.score.toFixed(3)} cosine=${item.cos.toFixed(3)} overlap=${item.overlap.toFixed(3)}</div>`;
-        list.appendChild(li);
-      }
-      if (!result.picked.length) {
-        const li = document.createElement('li');
-        li.className = 'small warn';
-        li.textContent = 'No matching memories.';
-        list.appendChild(li);
+      
+      if (result.picked.length > 0) {
+        detailsSection.style.display = 'block';
+        list.innerHTML = '';
+        for (const item of result.picked) {
+          const li = document.createElement('li');
+          li.innerHTML = `${item.text} <div class="small">score=${item.score.toFixed(3)} cosine=${item.cos.toFixed(3)} overlap=${item.overlap.toFixed(3)}</div>`;
+          list.appendChild(li);
+        }
+      } else {
+        detailsSection.style.display = 'none';
       }
     }
 
@@ -549,7 +546,16 @@
       const res = await fetch('./demo-data.json');
       const data = await res.json();
       syncConfigInputs(getDemoConfig(data));
-      const promptList = document.getElementById('promptList');
+      
+      // Setup collapsible config
+      const configCollapsible = document.getElementById('configCollapsible');
+      const configHeader = configCollapsible.querySelector('.collapsible-header');
+      configHeader.addEventListener('click', () => {
+        configCollapsible.classList.toggle('open');
+      });
+      
+      // Setup hero prompts
+      const heroPromptList = document.getElementById('heroPromptList');
       for (const prompt of data.prompts) {
         const btn = document.createElement('button');
         btn.className = 'prompt-chip';
@@ -558,19 +564,28 @@
           document.getElementById('query').value = prompt;
           run(data);
         };
-        promptList.appendChild(btn);
+        heroPromptList.appendChild(btn);
       }
 
       document.getElementById('response').textContent = 'Ready. Pick a prompt or type your own query.';
-      document.getElementById('meta').innerHTML = `<div class="status">Demo data loaded</div><div>Version ${data.version}</div><div>Config source: <code>demoConfig</code></div>`;
+      document.getElementById('meta').innerHTML = `<div class="status">Demo data loaded</div><div>Version ${data.version}</div>`;
 
       document.getElementById('runBtn').onclick = () => run(data);
       document.getElementById('clearBtn').onclick = () => {
         document.getElementById('query').value = '';
         document.getElementById('response').textContent = 'Cleared.';
         document.getElementById('meta').textContent = '';
+        document.getElementById('detailsSection').style.display = 'none';
         document.getElementById('memories').innerHTML = '';
       };
+      
+      // Add Ctrl+Enter functionality
+      document.getElementById('query').addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.key === 'Enter') {
+          e.preventDefault();
+          run(data);
+        }
+      });
     }
 
     function run(data) {
