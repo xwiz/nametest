@@ -42,6 +42,16 @@
       font-size: clamp(1.4rem, 2.5vw, 2.2rem);
       margin-bottom: 6px;
     }
+    .stats {
+      text-align: center;
+      margin: 16px 0;
+      padding: 8px;
+      background: rgba(103,232,249,0.05);
+      border: 1px solid rgba(103,232,249,0.1);
+      border-radius: 12px;
+      font-size: 0.85rem;
+      color: var(--accent);
+    }
     .hero .subtitle {
       font-size: 0.9rem;
       margin-bottom: 12px;
@@ -296,6 +306,8 @@
       </div>
     </section>
 
+    <div class="stats" id="stats">Loading system statistics...</div>
+
     <section class="panels">
       <div class="card">
         <h3>Query</h3>
@@ -318,6 +330,7 @@
               <option value="auto" selected>Auto</option>
               <option value="synth">Synth</option>
               <option value="reconstruct">Reconstruct</option>
+              <option value="yesno">Yes / No</option>
             </select>
           </div>
         </div>
@@ -383,7 +396,57 @@
       cluster_limit: 2,
       cluster_sentence_bias: 0.18,
       cluster_phrase_bias: 0.28,
+      graph_temp: 0.4,
     };
+
+    // ── PRNG (mulberry32) ──────────────────────────────────────────────────────
+    function makePrng(seed) {
+      let s = (seed ^ 0xdeadbeef) >>> 0;
+      return () => {
+        s = Math.imul(s ^ s >>> 15, s | 1);
+        s ^= s + Math.imul(s ^ s >>> 7, s | 61);
+        return ((s ^ s >>> 14) >>> 0) / 2**32;
+      };
+    }
+
+    // ── Polarity word sets ─────────────────────────────────────────────────────
+    const POLARITY_YES = new Set([
+      'yes','true','correct','always','definitely','certainly','proven',
+      'confirmed','affirmative','valid','possible','supported','accurate',
+      'help','working','normally','able','ready','functions','provides',
+    ]);
+    const POLARITY_NO = new Set([
+      'no','never','false','incorrect','cannot','impossible','wrong',
+      'invalid','forbidden','fails','denied','unsupported','unlikely','rarely',
+    ]);
+
+    function isYesNoQuestion(query) {
+      const first = query.trim().toLowerCase().split(/\s+/)[0].replace(/[^a-z]/g, '');
+      return ['is','are','was','were','do','does','did','can','could','will',
+              'would','should','has','have','had','may','might','must','shall'].includes(first);
+    }
+
+    function inferPolarity(fragments, rng, queryTokens = []) {
+      let yes = 0, no = 0;
+      for (const f of fragments) {
+        yes += f.score || 0;
+        for (const t of tokenise(f.text)) {
+          if (POLARITY_YES.has(t)) yes += 1;
+          if (POLARITY_NO.has(t)) no += 1;
+        }
+      }
+      for (const t of queryTokens) {
+        if (POLARITY_YES.has(t)) yes += 0.35;
+        if (POLARITY_NO.has(t)) no += 0.35;
+      }
+      if (yes === no) return rng() >= 0.5 ? 'yes' : 'no';
+      if (!yes && !no) return rng() >= 0.5 ? 'yes' : 'no';
+      if (yes > no * 1.15) return 'yes';
+      if (no > yes * 1.15) return 'no';
+      const total = yes + no;
+      if (!total) return rng() >= 0.5 ? 'yes' : 'no';
+      return rng() < (yes / total) ? 'yes' : 'no';
+    }
 
     function tokenise(text) {
       return (text.toLowerCase().match(/[a-z]+/g) || []).filter(w => w.length > 1);
@@ -473,6 +536,7 @@
         cluster_limit: Math.max(1, Math.floor(numberOr(raw.cluster_limit, DEFAULT_DEMO_CONFIG.cluster_limit))),
         cluster_sentence_bias: Math.max(0, numberOr(raw.cluster_sentence_bias, DEFAULT_DEMO_CONFIG.cluster_sentence_bias)),
         cluster_phrase_bias: Math.max(0, numberOr(raw.cluster_phrase_bias, DEFAULT_DEMO_CONFIG.cluster_phrase_bias)),
+        graph_temp: Math.min(2, Math.max(0.01, numberOr(raw.graph_temp, DEFAULT_DEMO_CONFIG.graph_temp))),
       };
     }
 
@@ -496,6 +560,7 @@
         cluster_limit: config.cluster_limit,
         cluster_sentence_bias: config.cluster_sentence_bias,
         cluster_phrase_bias: config.cluster_phrase_bias,
+        graph_temp: config.graph_temp,
       };
     }
 
@@ -574,6 +639,110 @@
       return chosen.map((line, i) => i === 0 ? line : `${CONNECTIVES[(i - 1) % CONNECTIVES.length]}${line.charAt(0).toLowerCase()}${line.slice(1)}`).join(' ');
     }
 
+    // ── Graph-walk synthesis (replaces cluster-biased synth) ─────────────────
+    function synthesiseWithGraph(picked, corpus, graph, config, rng) {
+      if (!picked.length) return 'No relevant memories found in the selected demo KB.';
+      const seedIdx = picked[0].idx;
+      if (!graph[String(seedIdx)]) return synthesise(null, picked, config);
+      const path = [corpus[seedIdx]];
+      const visited = new Set([seedIdx]);
+      let cur = seedIdx;
+      for (let step = 1; step < config.synth_limit; step++) {
+        const neighbors = (graph[String(cur)] || []).filter(e => !visited.has(e.to));
+        if (!neighbors.length) break;
+        const temp = config.graph_temp || 0.4;
+        const weights = neighbors.map(e => Math.pow(e.weight, 1 / Math.max(temp, 0.01)));
+        const total = weights.reduce((s, w) => s + w, 0);
+        let r = rng() * total;
+        let chosen = neighbors[neighbors.length - 1];
+        for (let i = 0; i < neighbors.length; i++) {
+          r -= weights[i];
+          if (r <= 0) { chosen = neighbors[i]; break; }
+        }
+        visited.add(chosen.to);
+        path.push(corpus[chosen.to]);
+        cur = chosen.to;
+      }
+      if (path.length === 1) return path[0];
+      return path.map((line, i) =>
+        i === 0 ? line : `${CONNECTIVES[(i - 1) % CONNECTIVES.length]}${line.charAt(0).toLowerCase()}${line.slice(1)}`
+      ).join(' ');
+    }
+
+    // ── Yes/No 4-cast voting ───────────────────────────────────────────────────
+    function perturbQuery(query, expansions, rng) {
+      const extras = [];
+      for (const t of tokenise(query)) {
+        for (const exp of (expansions[t] || [])) {
+          if (rng() > 0.5) extras.push(exp);
+        }
+      }
+      return extras.length ? `${query} ${extras.join(' ')}` : query;
+    }
+
+    function runYesNo(query, corpus, expansions, config) {
+      const qHash = tokenise(query).reduce((h, t) => ((h * 31 + t.charCodeAt(0)) | 0), 0);
+      const queryTokens = tokenise(query);
+      const baseSeed = Math.abs(qHash);
+
+      function performCasts(count) {
+        const votes = [];
+        const allPicked = [];
+        let fallbackSeen = false;
+        for (let cast = 0; cast < count; cast++) {
+          const rng = makePrng(baseSeed + cast * 1337);
+          const perturbed = perturbQuery(query, expansions, rng);
+          const { picked } = selectMemories(perturbed, corpus, expansions, config);
+          const { vote, fallback } = inferPolarity(picked, rng, queryTokens);
+          votes.push(vote);
+          if (fallback) fallbackSeen = true;
+          allPicked.push(...picked);
+        }
+        const yesCount = votes.filter(v => v === 'yes').length;
+        const noCount = votes.length - yesCount;
+        let answer;
+        if (yesCount === noCount) answer = 'Unclear';
+        else answer = yesCount > noCount ? 'Yes' : 'No';
+        const dominant = Math.max(yesCount, noCount);
+        const confidence = answer === 'Unclear'
+          ? `${yesCount}/${votes.length} vs ${noCount}/${votes.length} split`
+          : `${dominant}/${votes.length} casts`;
+        const seen = new Set();
+        const uniquePicked = allPicked.filter(p => !seen.has(p.text) && seen.add(p.text)).slice(0, config.selection_limit);
+        return { answer, confidence, votes, uniquePicked, fallbackSeen, casts: votes.length };
+      }
+
+      const initial = performCasts(4);
+      if (initial.fallbackSeen) {
+        return performCasts(16);
+      }
+      return initial;
+    }
+
+    function renderYesNo(result, version) {
+      const COLOR = { yes: '#34d399', no: '#ef4444', unclear: '#fbbf24' };
+      const responseEl = document.getElementById('response');
+      animateText(`${result.answer}\n\nConfidence: ${result.confidence}`, responseEl);
+      document.getElementById('meta').innerHTML = `
+        <div><span class="status">Loaded</span> version ${version}</div>
+        <div>Mode: <strong>yes/no · ${result.casts} casts</strong></div>
+        <div>Votes: ${result.votes.map(v => `<strong style="color:${COLOR[v] || '#fbbf24'}">${v}</strong>`).join(' &middot; ')}</div>
+      `;
+      const detailsSection = document.getElementById('detailsSection');
+      const list = document.getElementById('memories');
+      if (result.uniquePicked.length) {
+        detailsSection.style.display = 'block';
+        list.innerHTML = '';
+        for (const item of result.uniquePicked) {
+          const li = document.createElement('li');
+          li.innerHTML = `${item.text} <div class="small">score=${item.score.toFixed(3)}</div>`;
+          list.appendChild(li);
+        }
+      } else {
+        detailsSection.style.display = 'none';
+      }
+    }
+
     function chooseMode(picked, forcedMode, config) {
       if (forcedMode !== 'auto') return forcedMode;
       const avgWords = picked.length ? picked.reduce((n, x) => n + tokenise(x.text).length, 0) / picked.length : 0;
@@ -649,6 +818,18 @@
       const data = await res.json();
       syncConfigInputs(getDemoConfig(data));
       
+      // Calculate and display statistics
+      const totalMemories = data.chatKb.length + data.jsKb.length + data.sampleKb.length;
+      const totalClusters = Object.values(data.clusteredKb || {}).flat().length;
+      const totalExpansions = Object.keys(data.expansions).length;
+      const dataSize = JSON.stringify(data).length;
+      const sizeInKB = (dataSize / 1024).toFixed(1);
+      
+      const graphAll = (data.transitionGraphs || {}).all || {};
+      const totalGraphEdges = Object.values(graphAll).reduce((s, edges) => s + edges.length, 0);
+      document.getElementById('stats').innerHTML = 
+        `📊 <strong>${sizeInKB}KB</strong> • <strong>${totalMemories}</strong> memories • <strong>${totalGraphEdges}</strong> graph edges • <strong>${totalExpansions}</strong> expansions`;
+      
       // Setup collapsible config
       const configCollapsible = document.getElementById('configCollapsible');
       const configHeader = configCollapsible.querySelector('.collapsible-header');
@@ -716,18 +897,25 @@
         : dataset === 'sample'
         ? data.sampleKb
         : data.chatKb.concat(data.jsKb, data.sampleKb);
-      const clusteredKb = data.clusteredKb || {};
-      const clusters = dataset === 'chat'
-        ? (clusteredKb.chat || [])
-        : dataset === 'js'
-        ? (clusteredKb.js || [])
-        : dataset === 'sample'
-        ? (clusteredKb.sample || [])
-        : [...(clusteredKb.chat || []), ...(clusteredKb.js || []), ...(clusteredKb.sample || [])];
-      const { expanded, picked } = selectMemories(query, corpus, data.expansions, config, clusters);
+
+      // Yes/No mode: 4-cast polarity voting
+      if (forcedMode === 'yesno' || (forcedMode === 'auto' && isYesNoQuestion(query))) {
+        const result = runYesNo(query, corpus, data.expansions, config);
+        renderYesNo(result, data.version);
+        return;
+      }
+
+      // Cluster data is kept present but bypassed — pass [] to use flat retrieval
+      const { expanded, picked } = selectMemories(query, corpus, data.expansions, config, []);
       const mode = chooseMode(picked, forcedMode, config);
-      const response = mode === 'reconstruct' ? reconstruct(picked, config) : synthesise(query, picked, config);
-      render({ version: data.version, expanded, picked, response, mode, config });
+      const graphKey = dataset === 'all' ? 'all' : dataset;
+      const graph = (data.transitionGraphs || {})[graphKey] || {};
+      const qHash = tokenise(query).reduce((h, t) => ((h * 31 + t.charCodeAt(0)) | 0), 0);
+      const rng = makePrng(Math.abs(qHash));
+      const response = mode === 'reconstruct'
+        ? reconstruct(picked, config)
+        : synthesiseWithGraph(picked, corpus, graph, config, rng);
+      render({ version: data.version, expanded, picked, response, mode: mode === 'reconstruct' ? 'reconstruct' : 'graph-synth', config });
     }
 
     boot().catch(err => {

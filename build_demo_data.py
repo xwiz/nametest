@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from srm import __version__
@@ -21,7 +22,62 @@ DEMO_PROMPTS = [
     "write javascript code to fetch json from an api",
     "write js code to filter active users",
     "write javascript code to update an object without mutation",
+    "Can you help me?",
+    "Is DNA replication accurate?",
+    "Does JavaScript support async functions?",
+    "Can cells produce energy?",
 ]
+
+
+_GRAPH_STOPWORDS: frozenset[str] = frozenset({
+    'the','a','an','is','are','was','were','in','of','to','and','or','it','its',
+    'this','that','these','those','be','been','by','for','with','on','at','from',
+    'as','into','each','few','more','most','other','some','no','not','only',
+    'same','so','than','too','very','can','will','just','should','have','has',
+    'had','do','does','did','would','could','may','might','also','which','who',
+    'how','what','when','where','why','about','used','using','they','them',
+    'we','us','you','he','she','his','her','all','any',
+})
+
+
+def _content_tokens_graph(text: str) -> list[str]:
+    return [
+        w for w in re.findall(r'[a-z]+', text.lower())
+        if len(w) > 2 and w not in _GRAPH_STOPWORDS
+    ]
+
+
+def build_transition_graph(
+    corpus: list[str],
+    threshold: float = 0.12,
+    max_neighbors: int = 5,
+) -> dict[str, list[dict[str, object]]]:
+    token_sets = [set(_content_tokens_graph(t)) for t in corpus]
+    graph: dict[str, list[dict[str, object]]] = {}
+    for i, a in enumerate(token_sets):
+        if not a:
+            continue
+        neighbors: list[dict[str, object]] = []
+        for j, b in enumerate(token_sets):
+            if i == j or not b:
+                continue
+            overlap = len(a & b) / min(len(a), len(b))
+            if overlap >= threshold:
+                neighbors.append({"to": j, "weight": round(overlap, 3)})
+        if neighbors:
+            neighbors.sort(key=lambda x: x["weight"], reverse=True)
+            graph[str(i)] = neighbors[:max_neighbors]
+    return graph
+
+
+def build_transition_graphs() -> dict[str, dict[str, list[dict[str, object]]]]:
+    combined = CHAT_KB + JS_KB + SAMPLE_KB
+    return {
+        "chat": build_transition_graph(CHAT_KB),
+        "js": build_transition_graph(JS_KB),
+        "sample": build_transition_graph(SAMPLE_KB),
+        "all": build_transition_graph(combined),
+    }
 
 
 def _cluster(label: str, summary: str, kind: str, entries: list[str]) -> dict[str, object]:
@@ -132,12 +188,14 @@ def main() -> None:
     out = Path("docs") / "demo-data.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     clustered_kb = build_clustered_demo_kb()
+    transition_graphs = build_transition_graphs()
     payload = {
         "version": __version__,
         "sampleKb": SAMPLE_KB,
         "chatKb": CHAT_KB,
         "jsKb": JS_KB,
         "clusteredKb": clustered_kb,
+        "transitionGraphs": transition_graphs,
         "demoConfig": DEMO_CONFIG,
         "expansions": EXPANSIONS,
         "prompts": DEMO_PROMPTS,

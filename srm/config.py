@@ -33,6 +33,7 @@ DEMO_CONFIG: dict[str, float | int] = {
     "overlap_floor": 3,
     "overlap_ratio": 0.6,
     "auto_reconstruct_avg_words_below": 11,
+    "graph_temp": 0.4,
 }
 
 # ── Hybrid scoring weights ────────────────────────────────────────────────────
