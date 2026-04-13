@@ -7,6 +7,8 @@ any algorithmic code.
 
 from __future__ import annotations
 
+import math
+
 # ── SimHash ───────────────────────────────────────────────────────────────────
 CODE_BITS: int   = 128          # Hamming-space dimensionality
 PACK_BYTES: int  = CODE_BITS // 8
@@ -14,6 +16,24 @@ PACK_BYTES: int  = CODE_BITS // 8
 # ── Stochastic traversal ──────────────────────────────────────────────────────
 NUM_CASTS: int   = 40           # Probes fired per query
 NOISE: float     = 0.12         # Bit-flip probability per cast
+
+
+def adaptive_noise(num_memories: int, base_noise: float = NOISE) -> float:
+    """
+    Compute adaptive noise level based on KB size.
+
+    Tiny KBs need more exploration; large KBs need tighter noise.
+    Formula: noise = base_noise / (1 + log10(max(1, num_memories / 100)))
+
+    Args:
+        num_memories: Number of memories in the KB
+        base_noise: Base noise level (default: NOISE constant)
+
+    Returns:
+        Adjusted noise probability in [0, 1]
+    """
+    scale_factor = 1 + math.log10(max(1, num_memories / 100))
+    return base_noise / scale_factor
 
 # ── Retrieval ─────────────────────────────────────────────────────────────────
 TOP_K: int       = 5            # Candidate attractors to rank

@@ -164,6 +164,76 @@ ADJ_MULTIPLIERS: dict[str, float] = {
 }
 
 
+# ── Built-in verb polarity seed ───────────────────────────────────────────────────
+# Minimal built-in seed of common verbs with polarity masks to enable meaning system
+# out-of-the-box without requiring external verb JSON files.
+# Users can extend this by building a full meaning.db with build_meaning_db.py.
+
+import hashlib
+import numpy as np
+
+def _generate_polarity_mask(seed_words: list[str]) -> np.ndarray:
+    """Generate a 128-bit polarity mask from seed words using SimHash."""
+    weights = np.zeros(128, dtype=np.float64)
+    for word in seed_words:
+        raw = hashlib.md5(word.encode("utf-8")).digest()
+        bits = np.unpackbits(np.frombuffer(raw, dtype=np.uint8), bitorder="little")
+        weights += np.where(bits, 1.0, -1.0)
+    return np.packbits((weights > 0).astype(np.uint8))
+
+# Polarity classes: positive (constructive/beneficial), negative (destructive/harmful), neutral
+_BUILTIN_VERB_SEED: dict[str, tuple[str, list[str]]] = {
+    # Positive verbs - constructive, beneficial actions
+    "help": ("positive", ["assist", "support", "aid", "benefit", "improve"]),
+    "protect": ("positive", ["defend", "guard", "shield", "save", "preserve"]),
+    "heal": ("positive", ["cure", "recover", "restore", "repair", "treat"]),
+    "create": ("positive", ["make", "build", "produce", "generate", "construct"]),
+    "improve": ("positive", ["enhance", "better", "upgrade", "advance", "develop"]),
+    "learn": ("positive", ["study", "acquire", "understand", "master", "gain"]),
+    "solve": ("positive", ["resolve", "fix", "answer", "address", "handle"]),
+    "grow": ("positive", ["increase", "expand", "develop", "thrive", "rise"]),
+    
+    # Negative verbs - destructive, harmful actions
+    "kill": ("negative", ["destroy", "eliminate", "terminate", "end", "remove"]),
+    "harm": ("negative", ["damage", "hurt", "injure", "wound", "impair"]),
+    "break": ("negative", ["damage", "destroy", "smash", "crack", "fracture"]),
+    "fail": ("negative", ["lose", "collapse", "crash", "flop", "fall"]),
+    "block": ("negative", ["stop", "prevent", "hinder", "obstruct", "impede"]),
+    "destroy": ("negative", ["ruin", "demolish", "wreck", "annihilate", "erase"]),
+    "attack": ("negative", ["assault", "strike", "invade", "hit", "assail"]),
+    "reject": ("negative", ["refuse", "deny", "decline", "spurn", "dismiss"]),
+    
+    # Neutral verbs - descriptive, factual actions
+    "cause": ("neutral", ["create", "produce", "result", "lead", "trigger"]),
+    "move": ("neutral", ["shift", "transfer", "relocate", "transport", "displace"]),
+    "change": ("neutral", ["alter", "modify", "transform", "adjust", "vary"]),
+    "use": ("neutral", ["employ", "utilize", "apply", "lever", "exploit"]),
+    "need": ("neutral", ["require", "want", "demand", "lack", "miss"]),
+    "have": ("neutral", ["possess", "own", "hold", "contain", "carry"]),
+    "make": ("neutral", ["create", "produce", "build", "construct", "form"]),
+    "give": ("neutral", ["provide", "offer", "grant", "supply", "deliver"]),
+}
+
+# Pre-compute polarity masks for built-in verbs
+_BUILTIN_POLARITY_MASKS: dict[str, np.ndarray] = {}
+for verb, (polarity_class, seed_words) in _BUILTIN_VERB_SEED.items():
+    _BUILTIN_POLARITY_MASKS[verb] = _generate_polarity_mask(seed_words)
+
+
+def get_builtin_verb_mask(verb: str) -> np.ndarray | None:
+    """Get the built-in polarity mask for a verb, or None if not in seed."""
+    return _BUILTIN_POLARITY_MASKS.get(verb.lower())
+
+def get_builtin_verb_class(verb: str) -> str | None:
+    """Get the built-in polarity class for a verb, or None if not in seed."""
+    entry = _BUILTIN_VERB_SEED.get(verb.lower())
+    return entry[0] if entry else None
+
+def list_builtin_verbs() -> list[str]:
+    """Return list of verbs in the built-in seed."""
+    return sorted(_BUILTIN_VERB_SEED.keys())
+
+
 # ── Data container ────────────────────────────────────────────────────────────
 
 @dataclass
@@ -225,6 +295,7 @@ class MeaningDB:
         if v in self._verb_cache:
             return self._verb_cache[v]
 
+        # Try external DB first
         if self._has_direct_mask:
             row = self._conn.execute(
                 "SELECT id, verb, polarity_label AS polarity_class, polarity_mask "
@@ -238,6 +309,20 @@ class MeaningDB:
             ).fetchone()
 
         if row is None:
+            # Fall back to built-in seed
+            builtin_mask = get_builtin_verb_mask(v)
+            builtin_class = get_builtin_verb_class(v)
+            if builtin_mask is not None and builtin_class is not None:
+                vm = VerbMeaning(
+                    verb=v,
+                    polarity_class=builtin_class,
+                    polarity_mask=builtin_mask,
+                    goals=[],
+                    mechanisms=[],
+                    final_object=[],
+                )
+                self._verb_cache[v] = vm
+                return vm
             self._verb_cache[v] = None
             return None
 

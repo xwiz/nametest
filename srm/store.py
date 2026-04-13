@@ -47,16 +47,40 @@ class MemoryStore:
                 id   INTEGER PRIMARY KEY AUTOINCREMENT,
                 text TEXT UNIQUE NOT NULL
             )""")
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS store_version (
+                key TEXT PRIMARY KEY,
+                value INTEGER NOT NULL
+            )""")
+        # Initialize version counter if not exists
+        self.conn.execute("""
+            INSERT OR IGNORE INTO store_version (key, value) VALUES ('idf_version', 0)
+        """)
         self.conn.commit()
         self._flush_cache()
 
     # ── Cache management ──────────────────────────────────────────────
+
+    def _increment_version(self) -> None:
+        """Increment the store version counter to invalidate cached computations."""
+        self.conn.execute("""
+            UPDATE store_version SET value = value + 1 WHERE key = 'idf_version'
+        """)
+        self.conn.commit()
+
+    def _get_version(self) -> int:
+        """Get the current store version counter."""
+        row = self.conn.execute(
+            "SELECT value FROM store_version WHERE key = 'idf_version'"
+        ).fetchone()
+        return row[0] if row else 0
 
     def _flush_cache(self) -> None:
         """Invalidate all in-process caches."""
         self._ids:   list[int] | None        = None
         self._texts: list[str] | None        = None
         self._idf:   dict[str, float] | None = None
+        self._idf_version: int | None       = None
         self._codes: np.ndarray | None       = None
 
     # ── Reads ─────────────────────────────────────────────────────────
@@ -72,10 +96,12 @@ class MemoryStore:
         return self._ids, self._texts  # type: ignore[return-value]
 
     def get_idf(self) -> dict[str, float]:
-        """Corpus IDF table, lazily computed and cached."""
-        if self._idf is None:
+        """Corpus IDF table, lazily computed and cached with version tracking."""
+        current_version = self._get_version()
+        if self._idf is None or self._idf_version != current_version:
             _, texts   = self.load_all()
             self._idf  = idf_table(texts)
+            self._idf_version = current_version
         return self._idf
 
     def get_codes(self, meaning_db=None) -> np.ndarray:
@@ -121,6 +147,7 @@ class MemoryStore:
                 "INSERT INTO memories (text) VALUES (?)", (text,)
             )
             self.conn.commit()
+            self._increment_version()
             self._flush_cache()
             return True
         except sqlite3.IntegrityError:
@@ -136,13 +163,16 @@ class MemoryStore:
             "DELETE FROM memories WHERE id=?", (mem_id,)
         )
         self.conn.commit()
-        self._flush_cache()
+        if cur.rowcount > 0:
+            self._increment_version()
+            self._flush_cache()
         return cur.rowcount > 0
 
     def clear(self) -> None:
         """Delete all memories."""
         self.conn.execute("DELETE FROM memories")
         self.conn.commit()
+        self._increment_version()
         self._flush_cache()
 
     # ── Lifecycle ─────────────────────────────────────────────────────

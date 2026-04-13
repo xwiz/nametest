@@ -1,1 +1,4 @@
 numpy>=1.24
+nltk>=3.8
+fastapi>=0.104
+uvicorn[standard]>=0.24

@@ -24,6 +24,7 @@ from .config import (
     W_VOTE, W_COS,
     SIM_THRESH, MAX_WORDS,
     STOPWORDS,
+    adaptive_noise,
 )
 from .nlp import tokenise, tfidf_vec, cosine, expand_query
 from .encoding import encode, hamming_batch
@@ -215,6 +216,7 @@ def srm_query(
     max_words: int    = MAX_WORDS,
     meaning_db = None,     # srm.meaning.MeaningDB | None
     seed: int | None = None,
+    use_adaptive_noise: bool = False,
 ) -> dict:
     """
     Run a full SRM query against *store*.
@@ -248,6 +250,10 @@ def srm_query(
     ids, texts = store.load_all()
     if not texts:
         return {"error": "Memory store is empty. Use --seed or /add to populate."}
+
+    # Apply adaptive noise if explicitly requested
+    if use_adaptive_noise:
+        noise = adaptive_noise(len(texts), base_noise=noise)
 
     idf   = store.get_idf()
     codes = store.get_codes(meaning_db=meaning_db)
@@ -323,21 +329,34 @@ def srm_query(
         for i in ranked
     ]
 
+    response_text = (
+        synthesise(
+            query_text,
+            top_attractors,
+            num_casts=num_casts,
+            max_words=max_words,
+            sim_thresh=sim_thresh,
+            rng=(random.Random(seed) if seed is not None else None),
+        )
+        if top_attractors
+        else "No relevant memories found."
+    )
+
+    # Compute confidence score using the same quality metric as auto-mode
+    source_texts = [t for _, _, t in top_attractors]
+    confidence = _response_quality(
+        query_text,
+        response_text,
+        idf=idf,
+        source_texts=source_texts,
+        q_vec=q_vec,
+    )
+
     return {
         "query":             query_text,
         "expanded_query":    expanded if expanded != query_text else None,
-        "response":          (
-            synthesise(
-                query_text,
-                top_attractors,
-                num_casts=num_casts,
-                max_words=max_words,
-                sim_thresh=sim_thresh,
-                rng=(random.Random(seed) if seed is not None else None),
-            )
-            if top_attractors
-            else "No relevant memories found."
-        ),
+        "response":          response_text,
+        "confidence":        round(float(confidence), 4),
         "top_attractors":    top_attractors,
         "attractor_details": attractor_details,
         "cast_log":          cast_log,
@@ -365,6 +384,7 @@ def srm_query_auto(
     max_words: int = MAX_WORDS,
     meaning_db=None,
     seed: int | None = None,
+    use_adaptive_noise: bool = False,
 ) -> dict:
     """Try both response strategies and pick the one that scores better.
 
@@ -391,6 +411,7 @@ def srm_query_auto(
         max_words=max_words,
         meaning_db=meaning_db,
         seed=seed,
+        use_adaptive_noise=use_adaptive_noise,
     )
 
     recon = srm_query_cast_reconstruct(
@@ -402,6 +423,7 @@ def srm_query_auto(
         max_words=max_words,
         meaning_db=meaning_db,
         seed=seed,
+        use_adaptive_noise=use_adaptive_noise,
     )
 
     s_sources = [t for _, _, t in (synth.get("top_attractors") or [])]
@@ -447,6 +469,7 @@ def srm_query_cast_reconstruct(
     max_words: int    = MAX_WORDS,
     meaning_db=None,          # srm.meaning.MeaningDB | None
     seed: int | None = None,
+    use_adaptive_noise: bool = False,
 ) -> dict:
     """Run a small number of casts and reconstruct from unique cast landings.
 
@@ -457,6 +480,10 @@ def srm_query_cast_reconstruct(
     ids, texts = store.load_all()
     if not texts:
         return {"error": "Memory store is empty. Use --seed or /add to populate."}
+
+    # Apply adaptive noise if explicitly requested
+    if use_adaptive_noise:
+        noise = adaptive_noise(len(texts), base_noise=noise)
 
     idf   = store.get_idf()
     codes = store.get_codes(meaning_db=meaning_db)

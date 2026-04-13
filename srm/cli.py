@@ -26,6 +26,9 @@ from .config import (
 from .store import MemoryStore
 from .pipeline import srm_query, srm_query_cast_reconstruct, srm_query_auto
 from .learning import should_auto_learn
+from .nlp import set_auto_expansions
+from .expansions import build_expansions_from_kb, merge_expansions
+from .context import ConversationContext, augment_query_with_context
 
 
 # ── Box renderer ──────────────────────────────────────────────────────────────
@@ -95,6 +98,8 @@ def print_result(result: dict, verbose: bool = False) -> None:
             parts.append(f"traverse={result['num_traversal_candidates']}")
         if result.get("num_rerank_candidates") is not None:
             parts.append(f"rerank={result['num_rerank_candidates']}")
+        if result.get("confidence") is not None:
+            parts.append(f"confidence={result['confidence']:.4f}")
         if result.get("meaning_enabled"):
             parts.append("meaning=on")
         if result.get("auto_selected_mode"):
@@ -167,6 +172,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help=f"Number of stochastic probes (default: {NUM_CASTS})")
     ap.add_argument("--noise",  type=float, default=NOISE,     metavar="F",
                     help=f"Bit-flip probability per cast (default: {NOISE})")
+    ap.add_argument("--adaptive-noise", action="store_true",
+                    help="Enable adaptive noise that adjusts based on KB size")
     ap.add_argument("--top-k", type=int,   default=TOP_K,     metavar="K",
                     dest="top_k",
                     help=f"Maximum attractors to retrieve (default: {TOP_K})")
@@ -209,6 +216,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Optional meaning DB for verb-polarity-aware encoding")
     ap.add_argument("--auto-learn", action="store_true",
                     help="Auto-store safe conversational user messages in REPL")
+    ap.add_argument("--auto-expand", action="store_true",
+                    help="Generate query expansions from KB using WordNet synonyms")
 
     return ap
 
@@ -245,6 +254,21 @@ def main() -> None:
             print(f"  \033[31mCould not open meaning DB: {e}\033[0m")
             sys.exit(1)
 
+    # Build auto-expansions from KB if requested
+    if args.auto_expand:
+        try:
+            _, texts = store.load_all()
+            if texts:
+                from .config import EXPANSIONS
+                auto_exp = build_expansions_from_kb(texts, min_document_freq=2, max_terms=100)
+                merged = merge_expansions(EXPANSIONS, auto_exp)
+                set_auto_expansions(merged)
+                print(f"  Generated {len(auto_exp)} auto-expansions from {len(texts)} memories")
+            else:
+                print("  No memories in store to generate expansions from")
+        except Exception as e:
+            print(f"  \033[33mCould not generate auto-expansions: {e}\033[0m")
+
     # ── Pre-query mutations ───────────────────────────────────────────
 
     if args.clear:
@@ -265,10 +289,24 @@ def main() -> None:
 
     if args.load:
         try:
-            with open(args.load) as fh:
-                lines = [ln.strip() for ln in fh if ln.strip()]
-            n = sum(1 for ln in lines if store.add(ln))
-            print(f"  Loaded {n} memories from {args.load!r}  "
+            BATCH_SIZE = 500
+            added = 0
+            batch = []
+            with open(args.load, encoding='utf-8') as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        batch.append(line)
+                        if len(batch) >= BATCH_SIZE:
+                            for text in batch:
+                                if store.add(text):
+                                    added += 1
+                            batch = []
+                # Process remaining lines
+                for text in batch:
+                    if store.add(text):
+                        added += 1
+            print(f"  Loaded {added} memories from {args.load!r}  "
                   f"(total: {store.count()})")
         except OSError as e:
             print(f"  \033[31mCould not read {args.load!r}: {e}\033[0m")
@@ -319,6 +357,7 @@ def main() -> None:
                 max_words=args.max_words,
                 meaning_db=meaning_db,
                 seed=args.rng_seed,
+                use_adaptive_noise=args.adaptive_noise,
             )
         elif args.mode == "reconstruct":
             result = srm_query_cast_reconstruct(
@@ -330,6 +369,7 @@ def main() -> None:
                 max_words=args.max_words,
                 meaning_db=meaning_db,
                 seed=args.rng_seed,
+                use_adaptive_noise=args.adaptive_noise,
             )
         else:
             result = srm_query(
@@ -346,6 +386,7 @@ def main() -> None:
                 max_words=args.max_words,
                 meaning_db=meaning_db,
                 seed=args.rng_seed,
+                use_adaptive_noise=args.adaptive_noise,
             )
         print_result(result, verbose=args.verbose)
 
@@ -369,6 +410,9 @@ def main() -> None:
     else:
         print(f"  {n} memories loaded · {args.casts} casts · "
               f"noise={args.noise}\n")
+
+    # Initialize context buffer for multi-turn conversations
+    context = ConversationContext(max_turns=3)
 
     while True:
         try:
@@ -481,7 +525,64 @@ def main() -> None:
                     learned_msg = f"  \033[36m[auto-learn: {status} ({decision.reason})]\033[0m"
                 elif args.verbose:
                     learned_msg = f"  \033[2m[auto-learn skip: {decision.explanation}]\033[0m"
-            _run(raw)
+            
+            # Augment query with context if available
+            query_to_run = augment_query_with_context(raw, context, max_context_turns=2)
+            
+            result = None
+            if args.mode == "auto":
+                result = srm_query_auto(
+                    query_to_run,
+                    store,
+                    top_k=args.top_k,
+                    num_casts=args.casts,
+                    noise=args.noise,
+                    min_cos=args.min_cos,
+                    vote_floor=args.vote_floor,
+                    w_vote=args.w_vote,
+                    w_cos=args.w_cos,
+                    sim_thresh=args.sim_thresh,
+                    max_words=args.max_words,
+                    meaning_db=meaning_db,
+                    seed=args.rng_seed,
+                    use_adaptive_noise=args.adaptive_noise,
+                )
+            elif args.mode == "reconstruct":
+                result = srm_query_cast_reconstruct(
+                    query_to_run,
+                    store,
+                    num_casts=args.casts,
+                    noise=args.noise,
+                    sim_thresh=args.sim_thresh,
+                    max_words=args.max_words,
+                    meaning_db=meaning_db,
+                    seed=args.rng_seed,
+                    use_adaptive_noise=args.adaptive_noise,
+                )
+            else:
+                result = srm_query(
+                    query_to_run,
+                    store,
+                    top_k=args.top_k,
+                    num_casts=args.casts,
+                    noise=args.noise,
+                    min_cos=args.min_cos,
+                    vote_floor=args.vote_floor,
+                    w_vote=args.w_vote,
+                    w_cos=args.w_cos,
+                    sim_thresh=args.sim_thresh,
+                    max_words=args.max_words,
+                    meaning_db=meaning_db,
+                    seed=args.rng_seed,
+                    use_adaptive_noise=args.adaptive_noise,
+                )
+            
+            print_result(result, verbose=args.verbose)
+            
+            # Add turn to context if successful response
+            if result and "response" in result and result["response"]:
+                context.add_turn(raw, result["response"])
+            
             if learned_msg:
                 print(learned_msg)
             print()

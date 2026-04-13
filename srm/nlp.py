@@ -74,12 +74,30 @@ def cosine(a: dict[str, float], b: dict[str, float]) -> float:
 
 # ── Query expansion ───────────────────────────────────────────────────────────
 
+# Global cache for auto-generated expansions
+_auto_expansions: dict[str, list[str]] | None = None
+
+
+def set_auto_expansions(expansions: dict[str, list[str]]) -> None:
+    """Set the auto-generated expansions dictionary for use in expand_query."""
+    global _auto_expansions
+    _auto_expansions = expansions
+
+
+def get_auto_expansions() -> dict[str, list[str]]:
+    """Get the current auto-generated expansions dictionary."""
+    return _auto_expansions or {}
+
+
 def expand_query(text: str) -> str:
     """
     Append domain synonyms for key terms found in the query.
 
     Bridges the vocabulary gap between natural-language queries and
     the specific terminology stored in memories — without embeddings.
+
+    Uses both manual EXPANSIONS from config.py and auto-generated
+    expansions from WordNet (if available).
 
     Example:
         "How does the brain learn?" →
@@ -89,8 +107,14 @@ def expand_query(text: str) -> str:
     toks = tokenise(text)
     extras: list[str] = []
     seen: set[str] = set(toks)
+    
+    # Check both manual and auto-generated expansions
+    all_expansions = dict(EXPANSIONS)
+    if _auto_expansions:
+        all_expansions.update(_auto_expansions)
+    
     for t in toks:
-        for exp in EXPANSIONS.get(t, []):
+        for exp in all_expansions.get(t, []):
             if exp not in seen:
                 extras.append(exp)
                 seen.add(exp)
